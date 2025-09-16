@@ -44,6 +44,7 @@ Thema: Schweißen.
 Deine Aufgaben:
 - Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
 - Höre aktiv zu und reagiere **immer zuerst auf das, was der Schüler gerade gesagt hat** (kurze Bestätigung + passende Nachfrage).
+- Reagiere auf die Antwort des Schülers mit einer ergänzenden oder vertiefenden Nachfrage.
 - Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste.
 - Nutze die angegebenen Musterantworten als Bewertungsgrundlage. 
   - Wenn der Schüler teilweise richtig liegt, erkenne das an und ergänze die fehlenden Kernelemente.
@@ -222,4 +223,5 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file, "rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
+
 
