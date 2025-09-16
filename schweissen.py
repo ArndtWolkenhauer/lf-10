@@ -3,76 +3,89 @@ import openai
 import tempfile
 import time
 import requests
-import random
 from fpdf import FPDF
+import random
 
-# OpenAI Client
+# OpenAI Client initialisieren
 client = openai.OpenAI()
 
-# GitHub-Rohlinks
-text_url = "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-text.txt"
-fragen_url = "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-fragen.txt"
-antworten_url = "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-antworten.txt"
+# Dateien von GitHub laden
+urls = {
+    "text": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-text.txt",
+    "fragen": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-fragen.txt",
+    "antworten": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-antworten.txt"
+}
 
-def load_file(url):
+def load_text(url):
     try:
         r = requests.get(url, timeout=5)
         r.raise_for_status()
-        return r.text.strip().splitlines()
-    except Exception as e:
-        st.error(f"Fehler beim Laden von {url}: {e}")
-        return []
+        return r.text.strip()
+    except:
+        return "⚠️ Fehler beim Laden der Datei."
 
-# Dateien laden
-schweiss_text = "\n".join(load_file(text_url))
-fragen = load_file(fragen_url)
-antworten = load_file(antworten_url)
+schweiss_text = load_text(urls["text"])
+fragen_raw = load_text(urls["fragen"]).splitlines()
+antworten_raw = load_text(urls["antworten"]).splitlines()
 
-# Fragen + Musterantworten als Dictionary
-qa_pairs = {}
-for i, frage in enumerate(fragen):
-    if i < len(antworten):
-        qa_pairs[frage] = antworten[i]
-    else:
-        qa_pairs[frage] = ""
+# Fragen/Antworten als Dictionary zusammenführen
+qa_pairs = dict(zip(fragen_raw, antworten_raw))
 
 # System Prompt
 system_prompt = f"""
-Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. Die Schüler sprechen ausschließlich Deutsch.
+Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. 
 Thema: Schweißen.
-- Du führst eine mündliche Prüfung zum Thema Schweiseen durch. Die Schüler haben einen Text und Fragen zu Vorbereitung.
+
+⚠️ Wichtige Regeln:
+- Sprich und antworte **ausschließlich in deutscher Sprache**.
+- Interpretiere Schülerantworten immer als deutschsprachig, auch wenn einzelne englische Wörter vorkommen.
+- Verwende eine klare, einfache Sprache, wie sie in einem Berufsschul-Unterricht üblich ist.
+
+Deine Aufgaben:
 - Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
 - Höre aktiv zu und reagiere immer zuerst auf das, was der Schüler gerade gesagt hat (kurze Bestätigung + passende Nachfrage).
-- Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste. 
+- Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste.
 - Nutze die angegebenen Musterantworten als Bewertungsgrundlage. 
   - Wenn der Schüler teilweise richtig liegt, erkenne das an und ergänze die fehlenden Kernelemente.
   - Erwähne fehlende Inhalte behutsam und praxisnah.
-- Maximal fachlich, praxisnah, mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typ. Fehlerbildern.
-- Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
+- Maximal fachlich, praxisnah, mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typischen Fehlerbildern.
+
+Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
 \"\"\"{schweiss_text[:2000]}\"\"\"
-- Die Prüfung hat genau 5 Fragen. Es können sich im Gespräch aber auch zusatzfragen ergeben, die die Benotung bei richtiger Beantwortung positiv beeinflussen.
-- Nach jeder Schülerantwort: kurze Würdigung + eine Nachfrage/Vertiefung (aber keine neue Prüfungsfrage).
-- Keine Lösungen vorwegnehmen.
+
+Die Prüfung hat genau 5 Fragen.
+Nach jeder Schülerantwort: kurze Würdigung + eine Nachfrage/Vertiefung (aber keine neue Prüfungsfrage).
+Keine Lösungen vorwegnehmen.
 
 Hier sind die Prüfungsfragen mit den Musterantworten:
-{ {frage: qa_pairs[frage] for frage in list(qa_pairs.keys())[:10]} }
+{qa_pairs}
 """
 
-st.title("🛠️ Mündliche Prüfung Schweißen – Berufsschule")
+st.title("🛠️ Fachkundeprüfung Schweißen – Prüfungs-Simulation")
 
-# Session-State
+# --- Session Variablen ---
 if "messages" not in st.session_state:
     st.session_state["messages"] = [{"role": "system", "content": system_prompt}]
 if "fragen_gestellt" not in st.session_state:
-    st.session_state["fragen_gestellt"] = 0
-if "used_questions" not in st.session_state:
-    st.session_state["used_questions"] = []
+    st.session_state["fragen_gestellt"] = []
+if "start_time" not in st.session_state:
+    st.session_state["start_time"] = time.time()
 if "finished" not in st.session_state:
     st.session_state["finished"] = False
-if "feedback" not in st.session_state:
-    st.session_state["feedback"] = ""
 
-# Prüfungsgespräch
+# Hilfsfunktion PDF
+def safe_text(text):
+    return text.encode('latin-1', errors='replace').decode('latin-1')
+
+# --- Timer (5 Minuten) ---
+if st.session_state.get("start_time"):
+    elapsed = time.time() - st.session_state["start_time"]
+    remaining = max(0, 300 - int(elapsed))
+    minutes = remaining // 60
+    seconds = remaining % 60
+    st.info(f"⏱ Verbleibende Zeit: {minutes:02d}:{seconds:02d}")
+
+# --- Gespräch ---
 if not st.session_state["finished"]:
     audio_input = st.audio_input("🎙️ Deine Antwort aufnehmen")
     if audio_input:
@@ -80,94 +93,65 @@ if not st.session_state["finished"]:
             f.write(audio_input.getbuffer())
             temp_filename = f.name
 
-        # Speech-to-Text
+        # Speech-to-Text (auf Deutsch fixieren)
         with open(temp_filename, "rb") as f:
-            transcript = client.audio.transcriptions.create(model="whisper-1", file=f)
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                language="de"   # 👈 erzwingt Deutsch
+            )
         user_text = transcript.text
         st.write(f"**Du sagst:** {user_text}")
+
         st.session_state["messages"].append({"role": "user", "content": user_text})
 
-        # Lehrerantwort
-        if st.session_state["fragen_gestellt"] < 5:
-            q = random.choice([fq for fq in fragen if fq not in st.session_state["used_questions"]])
-            st.session_state["used_questions"].append(q)
-            st.session_state["fragen_gestellt"] += 1
-            muster = qa_pairs.get(q, "")
+        # Frage auswählen (max 5)
+        if len(st.session_state["fragen_gestellt"]) < 5:
+            verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
+            frage = random.choice(verbleibend)
+            st.session_state["fragen_gestellt"].append(frage)
 
-            teacher_prompt = st.session_state["messages"] + [{
+            # Lehrerantwort + Frage
+            prompt = st.session_state["messages"] + [{
                 "role": "system",
-                "content": f"""
-Reagiere zuerst kurz auf die Schülerantwort, 
-dann stelle die folgende Prüfungsfrage:
-'{q}'
-
-Nutze diese Musterantwort als Referenz für deine Bewertung:
-'{muster}'
-"""
+                "content": f"Stelle nun die nächste Prüfungsfrage:\nFrage: {frage}\nMusterantwort: {qa_pairs.get(frage,'')}"
             }]
-
-            response = client.chat.completions.create(model="gpt-4o-mini", messages=teacher_prompt)
-            teacher_text = response.choices[0].message.content
-            st.session_state["messages"].append({"role": "assistant", "content": teacher_text})
-            st.write(f"**Lehrer:** {teacher_text}")
+            response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
+            teacher_response = response.choices[0].message.content
         else:
+            # Feedback einleiten
+            response = client.chat.completions.create(model="gpt-4o-mini", messages=st.session_state["messages"] + [
+                {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine zusammenfassende Bewertung und eine Note (1-6)."}])
+            teacher_response = response.choices[0].message.content
             st.session_state["finished"] = True
 
-# Feedback am Ende
-if st.session_state["finished"] and not st.session_state["feedback"]:
-    st.subheader("📊 Endbewertung")
+        st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+        st.write(f"**Lehrer:** {teacher_response}")
 
-    feedback = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=st.session_state["messages"] + [{
-            "role": "system",
-            "content": f"""
-Erstelle eine Zusammenfassung des Prüfungsgesprächs.
-Bewerte die Schülerantworten anhand der bereitgestellten Musterantworten:
-{qa_pairs}
+# --- Feedback & PDF ---
+if st.session_state["finished"]:
+    feedback_text = st.session_state["messages"][-1]["content"]
 
-Gib Feedback zu:
-- Fachwissen (korrekt, teilweise, fehlend)
-- Vollständigkeit
-- Praxisbezug
-- Ausdruck und Fachsprache
-
-Schließe mit einer Endnote (1–6).
-"""
-        }]
-    )
-    st.session_state["feedback"] = feedback.choices[0].message.content
-    st.write(st.session_state["feedback"])
-
-# 📄 PDF Export
-if st.session_state["finished"] and st.session_state["feedback"]:
-    def create_pdf(messages, feedback):
+    # PDF generieren
+    def generate_pdf(messages, feedback_text, filename="schweissen_pruefung.pdf"):
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", size=12)
-
-        pdf.multi_cell(0, 10, "📑 Prüfungsprotokoll – Mündliche Prüfung Schweißen\n", align="L")
-        pdf.ln(5)
-
+        pdf.cell(0, 10, "Fachkundeprüfung Schweißen", ln=True, align="C")
+        pdf.ln(10)
         for msg in messages:
-            if msg["role"] == "user":
-                pdf.set_text_color(0, 0, 150)
-                pdf.multi_cell(0, 8, f"Schüler: {msg['content']}")
-            elif msg["role"] == "assistant":
-                pdf.set_text_color(0, 100, 0)
-                pdf.multi_cell(0, 8, f"Lehrer: {msg['content']}")
+            role = msg["role"].capitalize()
+            content = safe_text(msg["content"])
+            pdf.multi_cell(0, 10, f"{role}: {content}")
             pdf.ln(2)
-
-        pdf.set_text_color(0, 0, 0)
         pdf.ln(5)
-        pdf.multi_cell(0, 10, "📊 Endbewertung:\n", align="L")
-        pdf.multi_cell(0, 8, feedback)
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 10, "Endbewertung:", ln=True)
+        pdf.set_font("Arial", size=12)
+        pdf.multi_cell(0, 10, safe_text(feedback_text))
+        pdf.output(filename)
+        return filename
 
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        pdf.output(tmp_file.name)
-        return tmp_file.name
-
-    pdf_file = create_pdf(st.session_state["messages"], st.session_state["feedback"])
+    pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file, "rb") as f:
-        st.download_button("⬇️ Prüfungsprotokoll als PDF speichern", f, file_name="pruefung_schweissen.pdf")
-
+        st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
