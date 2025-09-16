@@ -5,352 +5,98 @@ import time
 import requests
 import random
 from fpdf import FPDF
-import json
 
-# =========================
 # OpenAI Client
-# =========================
 client = openai.OpenAI()
 
-# =========================
-# Konfiguration: Texte/Fragen/Antworten aus GitHub
-# Lege für jedes Thema drei Dateien im Ordner /texts an:
-#   <Key>_text            (Fließtext)
-#   <Key>_questions.json  (["Frage 1", "Frage 2", ...])
-#   <Key>_answers.json    (["Musterantwort 1", "Musterantwort 2", ...]) – gleiche Reihenfolge
-# =========================
-topic_sources = {
-    "Schweissen_Grundlagen": {
-        "text": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/Schweissen_Grundlagen_text",
-        "questions": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/Schweissen_Grundlagen_questions.json",
-        "answers": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/Schweissen_Grundlagen_answers.json",
-    },
-    "Schutzgasschweissen_MAG": {
-        "text": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/Schutzgasschweissen_MAG_text",
-        "questions": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/Schutzgasschweissen_MAG_questions.json",
-        "answers": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/Schutzgasschweissen_MAG_answers.json",
-    },
-    # Weitere Themen kannst du hier einfach ergänzen …
-}
+# GitHub-Rohlinks für Text, Fragen und Antworten
+text_url = "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-text.txt"
+fragen_url = "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-fragen.txt"
+antworten_url = "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-antworten.txt"
 
-# =========================
-# UI
-# =========================
-st.title("🔧🎤 Fachkunde-Schweißen – Mündliche Prüfung (IM)")
-
-# Session-Init
-for key, default in [
-    ("messages", []),
-    ("exam_started", False),
-    ("finished", False),
-    ("selected_topic", None),
-    ("text", ""),
-    ("questions", []),
-    ("answers", []),
-    ("question_order", []),
-    ("current_idx", 0),
-    ("student_answers", []),       # list of dicts: {"question":..., "student":..., "model":...}
-]:
-    if key not in st.session_state:
-        st.session_state[key] = default
-
-def safe_text_latin1(text):
-    return text.encode("latin-1", errors="replace").decode("latin-1")
-
-def fetch_raw(url, expect_json=False, fallback=""):
+def load_file(url):
     try:
-        r = requests.get(url, timeout=8)
+        r = requests.get(url, timeout=5)
         r.raise_for_status()
-        return r.json() if expect_json else r.text
-    except Exception:
-        return [] if expect_json else fallback
+        return r.text.strip().splitlines()
+    except Exception as e:
+        st.error(f"Fehler beim Laden von {url}: {e}")
+        return []
 
-# =========================
-# Thema wählen & Daten laden
-# =========================
-if not st.session_state["exam_started"] and not st.session_state["finished"]:
-    topic = st.selectbox("Thema auswählen:", ["--bitte wählen--"] + list(topic_sources.keys()))
-    if topic != "--bitte wählen--":
-        st.session_state["selected_topic"] = topic
-        src = topic_sources[topic]
-        text = fetch_raw(src["text"], expect_json=False, fallback="(Konnte Text nicht laden)")
-        questions = fetch_raw(src["questions"], expect_json=True, fallback=[])
-        answers = fetch_raw(src["answers"], expect_json=True, fallback=[])
+# Dateien laden
+schweiss_text = "\n".join(load_file(text_url))
+fragen = load_file(fragen_url)
+antworten = load_file(antworten_url)
 
-        if not isinstance(questions, list) or not isinstance(answers, list) or len(questions) != len(answers) or len(questions) == 0:
-            st.error("⚠️ Fragen/Antworten konnten nicht korrekt geladen werden (Liste oder Längen passen nicht).")
-        else:
-            st.session_state["text"] = text
-            st.session_state["questions"] = questions
-            st.session_state["answers"] = answers
-            st.success(f"✔️ Daten für **{topic}** geladen.")
-
-            st.subheader("📖 Ausgangstext")
-            st.write(text)
-
-            if st.button("▶️ Prüfung starten (5 zufällige Fragen)"):
-                # 5 einzigartige Zufallsfragen
-                indices = list(range(len(questions)))
-                random.shuffle(indices)
-                st.session_state["question_order"] = indices[:5] if len(indices) >= 5 else indices  # falls weniger vorhanden
-                st.session_state["current_idx"] = 0
-                st.session_state["student_answers"] = []
-                st.session_state["exam_started"] = True
-
-# =========================
-# Systemprompt (Lehrer)
-# =========================
-def build_system_prompt():
-    return f"""
-Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. Thema: Schweißen.
+# System Prompt
+system_prompt = f"""
+Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. 
+Thema: Schweißen.
 - Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
 - Höre aktiv zu und reagiere immer zuerst auf das, was der Schüler gerade gesagt hat (kurze Bestätigung + passende Nachfrage).
-- Stelle pro Runde genau **eine** Prüfungsfrage (aus der vorgegebenen Liste). Wenn Antwort sehr kurz/unklar: bitte um Konkretisierung.
+- Stelle pro Runde genau **eine** Prüfungsfrage (aus der vorgegebenen Liste). 
+- Wenn Antwort sehr kurz/unklar: bitte um Konkretisierung.
 - Falls der Schüler fachlich teilweise richtig liegt, erkenne das an und ergänze schonend fehlende Kernelemente.
-- Der Schüler spricht Deutsch; bitte keine Sprachdiskussionen.
 - Maximal fachlich, praxisnah, mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typ. Fehlerbildern.
-- Der Schüler hat vorher folgenden Text gelesen (als Grundlage):
-\"\"\"{st.session_state['text'][:2000]}\"\"\"  # Truncate safety
-- Du führst eine mündliche Prüfung mit genau 5 Fragen (bereitgestellt) durch.
-- Nach jeder Schülerantwort: kurze Würdigung + eine Nachfrage/Vertiefung (aber **keine** neue Prüfungsfrage).
+- Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
+\"\"\"{schweiss_text[:2000]}\"\"\"
+- Die Prüfung hat genau 5 Fragen.
+- Nach jeder Schülerantwort: kurze Würdigung + eine Nachfrage/Vertiefung (aber keine neue Prüfungsfrage).
 - Keine Lösungen vorwegnehmen.
 """
 
-# =========================
-# Prüfungs-Flow
-# =========================
-def current_question_and_model():
-    idx_global = st.session_state["question_order"][st.session_state["current_idx"]]
-    return st.session_state["questions"][idx_global], st.session_state["answers"][idx_global]
+st.title("🛠️ Mündliche Prüfung Schweißen – Berufsschule")
 
-def append_teacher_message(content):
-    st.session_state["messages"].append({"role": "assistant", "content": content})
+# Session-State
+if "messages" not in st.session_state:
+    st.session_state["messages"] = [{"role": "system", "content": system_prompt}]
+if "fragen_gestellt" not in st.session_state:
+    st.session_state["fragen_gestellt"] = 0
+if "used_questions" not in st.session_state:
+    st.session_state["used_questions"] = []
+if "finished" not in st.session_state:
+    st.session_state["finished"] = False
 
-def append_user_message(content):
-    st.session_state["messages"].append({"role": "user", "content": content})
-
-def tts_play(text):
-    try:
-        tts = client.audio.speech.create(model="gpt-4o-mini-tts", voice="alloy", input=text)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-            f.write(tts.read())
-            st.audio(f.name)
-    except Exception:
-        pass
-
-if st.session_state["exam_started"] and not st.session_state["finished"]:
-    questions_left = len(st.session_state["question_order"]) - st.session_state["current_idx"]
-    st.info(f"🧪 Prüfungsfragen verbleibend: {questions_left}")
-
-    # Aktuelle Prüfungsfrage anzeigen/sprechen
-    question, model_answer = current_question_and_model()
-    st.subheader("❓ Prüfungsfrage")
-    st.write(question)
-
-    # Frage auch einmalig als Lehrer-Chatnachricht setzen (beim Rundenbeginn)
-    if not st.session_state["messages"] or st.session_state["messages"][-1]["content"] != question:
-        system = build_system_prompt()
-        if not st.session_state["messages"] or st.session_state["messages"][0].get("role") != "system":
-            st.session_state["messages"].insert(0, {"role": "system", "content": system})
-        append_teacher_message(question)
-        tts_play(question)
-
-    # Audioeingabe (Schüler)
+# Prüfungsgespräch
+if not st.session_state["finished"]:
     audio_input = st.audio_input("🎙️ Deine Antwort aufnehmen")
     if audio_input:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
             f.write(audio_input.getbuffer())
-            wav_path = f.name
+            temp_filename = f.name
 
-        # Transkription
-        try:
-            with open(wav_path, "rb") as f:
-                transcript = client.audio.transcriptions.create(model="whisper-1", file=f)
-            user_text = transcript.text.strip()
-        except Exception:
-            user_text = ""
+        # Speech-to-Text
+        with open(temp_filename, "rb") as f:
+            transcript = client.audio.transcriptions.create(model="whisper-1", file=f)
+        user_text = transcript.text
+        st.write(f"**Du sagst:** {user_text}")
+        st.session_state["messages"].append({"role": "user", "content": user_text})
 
-        if not user_text:
-            st.warning("⚠️ Keine verständliche Antwort erkannt. Bitte erneut versuchen.")
+        # Lehrer reagiert
+        if st.session_state["fragen_gestellt"] < 5:
+            # Neue Prüfungsfrage auswählen
+            if st.session_state["fragen_gestellt"] >= len(st.session_state["used_questions"]):
+                q = random.choice([fq for fq in fragen if fq not in st.session_state["used_questions"]])
+                st.session_state["used_questions"].append(q)
+                st.session_state["fragen_gestellt"] += 1
+                teacher_prompt = st.session_state["messages"] + [{"role": "system", "content": f"Reagiere zuerst kurz auf die Schülerantwort, dann stelle folgende Prüfungsfrage: {q}"}]
+            else:
+                teacher_prompt = st.session_state["messages"]
+
+            response = client.chat.completions.create(model="gpt-4o-mini", messages=teacher_prompt)
+            teacher_text = response.choices[0].message.content
+            st.session_state["messages"].append({"role": "assistant", "content": teacher_text})
+            st.write(f"**Lehrer:** {teacher_text}")
         else:
-            st.write(f"**Deine Antwort:** {user_text}")
-            append_user_message(user_text)
+            st.session_state["finished"] = True
 
-            # Lehrerrückmeldung & Nachfrage (keine neue Prüfungsfrage!)
-            teacher_resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=st.session_state["messages"] + [
-                    {"role": "system", "content": "Reagiere kurz positiv auf die Antwort und stelle genau eine passende Rückfrage zur Vertiefung. Gib keine Lösung preis."}
-                ]
-            ).choices[0].message.content
-
-            append_teacher_message(teacher_resp)
-            st.write(f"**Lehrer:** {teacher_resp}")
-            tts_play(teacher_resp)
-
-            # Antwort speichern
-            st.session_state["student_answers"].append({
-                "question": question,
-                "student": user_text,
-                "model": model_answer
-            })
-
-            # Nächste Frage
-            st.session_state["current_idx"] += 1
-            if st.session_state["current_idx"] >= len(st.session_state["question_order"]):
-                st.session_state["finished"] = True
-
-# =========================
-# Abschluss: Auswertung, Note, PDF
-# =========================
-def grade_rubric():
-    return """
-Bewertung (1–6):
-1 = sehr gut: fachlich korrekt/präzise, vollständige Begründungen, sicheres Vokabular, klare Struktur, aktive Mitarbeit.
-2 = gut: überwiegend korrekt, kleinere Lücken/Unschärfen, gute Struktur, nachvollziehbare Beispiele.
-3 = befriedigend: teils richtig, teils lückenhaft, einfache Begründungen, unsichere Fachbegriffe.
-4 = ausreichend: viele Lücken, oberflächliche/teilweise falsche Aussagen, unsichere Struktur.
-5 = mangelhaft: überwiegend falsch/unvollständig, kaum Begründungen, fehlende Terminologie.
-6 = ungenügend: keine verwertbaren Aussagen.
-"""
-
-def evaluate_answers_with_gpt(items):
-    """ items: list of dicts {question, student, model} -> returns list with evaluation fields """
-    eval_prompt = f"""
-Du bist Prüfer für Industriemechaniker (Thema Schweißen). Vergleiche pro Frage die Schülerantwort mit der Musterantwort.
-Gib je Frage strukturiert zurück:
-- Korrektheit (kurz)
-- Fehlendes/Wichtiges (kurz, stichpunktartig)
-- Einfaches Punkteschema 0–4 (4=voll zutreffend, 3=weitgehend, 2=teilweise, 1=kaum, 0=falsch)
-Berücksichtige Praxis, Sicherheit, Parameter, Fehlerbilder. Antworte als JSON-Liste passend zu den Eingaben.
-"""
-    messages = [
-        {"role": "system", "content": "Antworte präzise, fachlich korrekt, in deutscher Sprache."},
-        {"role": "user", "content": eval_prompt},
-        {"role": "user", "content": json.dumps(items, ensure_ascii=False)},
-    ]
-    chat = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
-    content = chat.choices[0].message.content
-    # Fallback robustes Parsing
-    try:
-        data = json.loads(content)
-        if isinstance(data, list):
-            return data
-    except Exception:
-        pass
-    # Minimaler Fallback: leere Bewertungen mit 2 Punkten
-    return [{"Korrektheit": "—", "Fehlendes/Wichtiges": "—", "Punkte": 2} for _ in items]
-
-def derive_grade(points_list):
-    # Mittelwert 0–4 -> Schulnote 1–6 (heuristisch)
-    if not points_list:
-        return 6
-    avg = sum(points_list) / len(points_list)
-    # Mapping (kannst du später feinjustieren)
-    # 3.6–4.0 -> 1 ; 3.2–<3.6 -> 2 ; 2.6–<3.2 -> 3 ; 2.0–<2.6 -> 4 ; 1.0–<2.0 -> 5 ; <1.0 -> 6
-    if avg >= 3.6: return 1
-    if avg >= 3.2: return 2
-    if avg >= 2.6: return 3
-    if avg >= 2.0: return 4
-    if avg >= 1.0: return 5
-    return 6
-
-def pdf_report(filename, topic, base_text, qas, evals, final_grade):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=12)
-    pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, "Mündliche Prüfung – Fachkunde Schweißen (IM)", ln=True, align="C")
-    pdf.set_font("Arial", size=11)
-    pdf.ln(2)
-    pdf.cell(0, 8, f"Thema: {safe_text_latin1(topic)}", ln=True)
-    pdf.ln(2)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "Ausgangstext (Kurzfassung):", ln=True)
-    pdf.set_font("Arial", size=11)
-    short_text = base_text if len(base_text) < 1200 else base_text[:1200] + " ..."
-    pdf.multi_cell(0, 6, safe_text_latin1(short_text))
-    pdf.ln(3)
-
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "Fragen – Antworten – Musterlösung:", ln=True)
-    pdf.set_font("Arial", size=11)
-    for i, qa in enumerate(qas, start=1):
-        pdf.ln(1)
-        pdf.set_font("Arial", "B", 11)
-        pdf.multi_cell(0, 6, safe_text_latin1(f"F{i}: {qa['question']}"))
-        pdf.set_font("Arial", size=11)
-        pdf.multi_cell(0, 6, safe_text_latin1(f"Schülerantwort: {qa['student']}"))
-        pdf.multi_cell(0, 6, safe_text_latin1(f"Musterantwort: {qa['model']}"))
-        if i-1 < len(evals):
-            ev = evals[i-1]
-            pdf.ln(1)
-            pdf.set_font("Arial", "B", 11)
-            pdf.cell(0, 6, "Bewertung:", ln=True)
-            pdf.set_font("Arial", size=11)
-            pdf.multi_cell(0, 6, safe_text_latin1(f"- Korrektheit: {ev.get('Korrektheit','—')}"))
-            pdf.multi_cell(0, 6, safe_text_latin1(f"- Fehlendes/Wichtiges: {ev.get('Fehlendes/Wichtiges','—')}"))
-            pdf.multi_cell(0, 6, safe_text_latin1(f"- Punkte (0–4): {ev.get('Punkte','—')}"))
-        pdf.ln(2)
-
-    pdf.ln(2)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "Gesamtnote:", ln=True)
-    pdf.set_font("Arial", size=12)
-    pdf.multi_cell(0, 8, safe_text_latin1(f"Note: {final_grade} (1=sehr gut … 6=ungenügend)"))
-    pdf.ln(2)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "Bewertungsmaßstab:", ln=True)
-    pdf.set_font("Arial", size=10)
-    pdf.multi_cell(0, 6, safe_text_latin1(grade_rubric()))
-    pdf.output(filename)
-    return filename
-
+# Feedback am Ende
 if st.session_state["finished"]:
-    st.subheader("📊 Auswertung & Note")
+    st.subheader("📊 Endbewertung")
 
-    # GPT-gestützte Einzelbewertung
-    evaluations = evaluate_answers_with_gpt(st.session_state["student_answers"])
-
-    # Notenfindung
-    points = []
-    for e in evaluations:
-        try:
-            points.append(float(e.get("Punkte", 0)))
-        except Exception:
-            points.append(0.0)
-    note = derive_grade(points)
-
-    # Anzeige in der App
-    for i, qa in enumerate(st.session_state["student_answers"], start=1):
-        st.markdown(f"**F{i}:** {qa['question']}")
-        st.markdown(f"- Schülerantwort: {qa['student']}")
-        st.markdown(f"- Musterantwort: {qa['model']}")
-        if i-1 < len(evaluations):
-            ev = evaluations[i-1]
-            st.markdown(f"  - **Korrektheit:** {ev.get('Korrektheit','—')}")
-            st.markdown(f"  - **Fehlendes/Wichtiges:** {ev.get('Fehlendes/Wichtiges','—')}")
-            st.markdown(f"  - **Punkte (0–4):** {ev.get('Punkte','—')}")
-        st.markdown("---")
-
-    st.success(f"**Gesamtnote: {note}**  (1=sehr gut … 6=ungenügend)")
-
-    # PDF erzeugen & Download
-    pdf_name = f"Pruefung_Schweissen_{int(time.time())}.pdf"
-    pdf_path = pdf_report(
-        filename=pdf_name,
-        topic=st.session_state["selected_topic"],
-        base_text=st.session_state["text"],
-        qas=st.session_state["student_answers"],
-        evals=evaluations,
-        final_grade=note
+    feedback = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=st.session_state["messages"] + [{"role": "system", "content": "Erstelle eine Zusammenfassung des Prüfungsgesprächs. Bewerte den Schüler (1–6), gehe dabei auf Fachwissen, Vollständigkeit, Praxisbezug und Ausdruck ein."}]
     )
-
-    with open(pdf_path, "rb") as f:
-        st.download_button("📥 PDF-Feedback herunterladen", f, file_name=pdf_name)
-
-    # Neustartoption
-    if st.button("🔄 Neue Prüfung starten"):
-        for k in ["messages","exam_started","finished","selected_topic","text","questions","answers","question_order","current_idx","student_answers"]:
-            st.session_state[k] = [] if isinstance(st.session_state[k], list) else False
-        st.rerun()
+    feedback_text = feedback.choices[0].message.content
+    st.write(feedback_text)
