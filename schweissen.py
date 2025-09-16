@@ -28,7 +28,7 @@ schweiss_text = "\n".join(load_file(text_url))
 fragen = load_file(fragen_url)
 antworten = load_file(antworten_url)
 
-# ⭐ Fragen + Musterantworten als Dictionary zusammenführen
+# Fragen + Musterantworten als Dictionary
 qa_pairs = {}
 for i, frage in enumerate(fragen):
     if i < len(antworten):
@@ -42,7 +42,7 @@ Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule
 Thema: Schweißen.
 - Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
 - Höre aktiv zu und reagiere immer zuerst auf das, was der Schüler gerade gesagt hat (kurze Bestätigung + passende Nachfrage).
-- Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste (siehe unten). 
+- Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste. 
 - Nutze die angegebenen Musterantworten als Bewertungsgrundlage. 
   - Wenn der Schüler teilweise richtig liegt, erkenne das an und ergänze die fehlenden Kernelemente.
   - Erwähne fehlende Inhalte behutsam und praxisnah.
@@ -54,7 +54,7 @@ Thema: Schweißen.
 - Keine Lösungen vorwegnehmen.
 
 Hier sind die Prüfungsfragen mit den Musterantworten:
-{ {frage: qa_pairs[frage] for frage in list(qa_pairs.keys())[:10]} }   # nur die ersten 10 anzeigen zur Sicherheit
+{ {frage: qa_pairs[frage] for frage in list(qa_pairs.keys())[:10]} }
 """
 
 st.title("🛠️ Mündliche Prüfung Schweißen – Berufsschule")
@@ -68,6 +68,8 @@ if "used_questions" not in st.session_state:
     st.session_state["used_questions"] = []
 if "finished" not in st.session_state:
     st.session_state["finished"] = False
+if "feedback" not in st.session_state:
+    st.session_state["feedback"] = ""
 
 # Prüfungsgespräch
 if not st.session_state["finished"]:
@@ -86,7 +88,6 @@ if not st.session_state["finished"]:
 
         # Lehrerantwort
         if st.session_state["fragen_gestellt"] < 5:
-            # ⭐ zufällige Prüfungsfrage auswählen (ohne Wiederholung)
             q = random.choice([fq for fq in fragen if fq not in st.session_state["used_questions"]])
             st.session_state["used_questions"].append(q)
             st.session_state["fragen_gestellt"] += 1
@@ -112,7 +113,7 @@ Nutze diese Musterantwort als Referenz für deine Bewertung:
             st.session_state["finished"] = True
 
 # Feedback am Ende
-if st.session_state["finished"]:
+if st.session_state["finished"] and not st.session_state["feedback"]:
     st.subheader("📊 Endbewertung")
 
     feedback = client.chat.completions.create(
@@ -134,5 +135,37 @@ Schließe mit einer Endnote (1–6).
 """
         }]
     )
-    feedback_text = feedback.choices[0].message.content
-    st.write(feedback_text)
+    st.session_state["feedback"] = feedback.choices[0].message.content
+    st.write(st.session_state["feedback"])
+
+# 📄 PDF Export
+if st.session_state["finished"] and st.session_state["feedback"]:
+    def create_pdf(messages, feedback):
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+
+        pdf.multi_cell(0, 10, "📑 Prüfungsprotokoll – Mündliche Prüfung Schweißen\n", align="L")
+        pdf.ln(5)
+
+        for msg in messages:
+            if msg["role"] == "user":
+                pdf.set_text_color(0, 0, 150)
+                pdf.multi_cell(0, 8, f"Schüler: {msg['content']}")
+            elif msg["role"] == "assistant":
+                pdf.set_text_color(0, 100, 0)
+                pdf.multi_cell(0, 8, f"Lehrer: {msg['content']}")
+            pdf.ln(2)
+
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(5)
+        pdf.multi_cell(0, 10, "📊 Endbewertung:\n", align="L")
+        pdf.multi_cell(0, 8, feedback)
+
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        pdf.output(tmp_file.name)
+        return tmp_file.name
+
+    pdf_file = create_pdf(st.session_state["messages"], st.session_state["feedback"])
+    with open(pdf_file, "rb") as f:
+        st.download_button("⬇️ Prüfungsprotokoll als PDF speichern", f, file_name="pruefung_schweissen.pdf")
