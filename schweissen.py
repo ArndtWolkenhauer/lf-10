@@ -43,12 +43,17 @@ Thema: Schweißen.
 
 Deine Aufgaben:
 - Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
-- Höre aktiv zu und reagiere immer zuerst auf das, was der Schüler gerade gesagt hat (kurze Bestätigung + passende Nachfrage).
+- Höre aktiv zu und reagiere **immer zuerst auf das, was der Schüler gerade gesagt hat** (kurze Bestätigung + passende Nachfrage).
 - Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste.
 - Nutze die angegebenen Musterantworten als Bewertungsgrundlage. 
   - Wenn der Schüler teilweise richtig liegt, erkenne das an und ergänze die fehlenden Kernelemente.
   - Erwähne fehlende Inhalte behutsam und praxisnah.
 - Maximal fachlich, praxisnah, mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typischen Fehlerbildern.
+- Wenn der Schüler unhöflich, respektlos oder beleidigend wird:
+  - Bewahren Sie Ruhe und Professionalität.
+  - Sagen Sie dem Schüler höflich, aber bestimmt, dass ein solches Verhalten im Unterricht nicht akzeptabel ist.
+  - Reduzieren Sie die Endnote um mindestens ein oder zwei Stufen, je nach Schwere.
+  - Reflektieren Sie dieses Verhalten ausdrücklich im abschließenden Feedback.
 
 Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
 \"\"\"{schweiss_text[:2000]}\"\"\"
@@ -217,3 +222,4 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file, "rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
+
