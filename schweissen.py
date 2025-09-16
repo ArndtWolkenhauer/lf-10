@@ -70,6 +70,8 @@ if "fragen_gestellt" not in st.session_state:
     st.session_state["fragen_gestellt"] = []
 if "start_time" not in st.session_state:
     st.session_state["start_time"] = time.time()
+if "answer_times" not in st.session_state:
+    st.session_state["answer_times"] = []  # Zeitpunkte der Antworten speichern
 if "finished" not in st.session_state:
     st.session_state["finished"] = False
 
@@ -103,6 +105,15 @@ if not st.session_state["finished"]:
         user_text = transcript.text
         st.write(f"**Du sagst:** {user_text}")
 
+        # Antwortzeit erfassen
+        now = time.time()
+        if st.session_state["fragen_gestellt"]:
+            last_question_time = st.session_state["answer_times"][-1][0]
+        else:
+            last_question_time = st.session_state["start_time"]
+        response_time = now - last_question_time
+        st.session_state["answer_times"].append((now, response_time))
+
         st.session_state["messages"].append({"role": "user", "content": user_text})
 
         # Frage auswählen (max 5)
@@ -110,6 +121,7 @@ if not st.session_state["finished"]:
             verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
             frage = random.choice(verbleibend)
             st.session_state["fragen_gestellt"].append(frage)
+            st.session_state["answer_times"].append((time.time(), 0))  # Zeitpunkt der neuen Frage
 
             # Lehrerantwort + Frage
             prompt = st.session_state["messages"] + [{
@@ -143,35 +155,35 @@ if st.session_state["finished"]:
     total_words = sum(word_counts)
     num_answers = len(user_answers)
 
-    # Bewertungsanweisung für GPT (Note + Prozentskala)
+    # Durchschnittliche Reaktionszeit berechnen
+    response_times = [rt for _, rt in st.session_state["answer_times"][1:]]  # erste Zeit ignorieren
+    avg_response_time = sum(response_times) / len(response_times) if response_times else 0
+
+    # Bewertungsanweisung für GPT (Note + Prozentskala + Reaktionszeit)
     eval_prompt = f"""
     Du bist Fachkundelehrer für Industriemechaniker. 
     Bewerte die mündliche Prüfung zum Thema Schweißen nach folgenden Kriterien:
 
-    1. Fachliche Korrektheit:
+    1. Fachliche Korrektheit: 60 %
        - Vergleiche jede Schülerantwort mit der Musterantwort (so weit wie möglich).
        - Erkenne Teilerfolge an und ergänze fehlende Punkte.
-       - Gewicht: 70 %
 
-    2. Antwortumfang:
+    2. Antwortumfang: 25 %
        - Anzahl Antworten: {num_answers}
        - Durchschnittliche Länge: {avg_length:.1f} Wörter
        - Gesamtumfang: {total_words} Wörter
-       - Bewerte, ob die Antworten eher knapp oder ausführlich waren.
-       - Gewicht: 30 %
 
-    3. Gesamteindruck:
-       - Sprich die Stärken an.
-       - Nenne konkrete Verbesserungsmöglichkeiten (fachlich + sprachlich).
-       - Weise eine **Note (1–6)** zu.
-       - Zusätzlich eine **Prozentbewertung von 0–100 %**, errechnet aus fachlicher Korrektheit und Umfang.
+    3. Reaktionszeit: 15 %
+       - Durchschnittliche Antwortzeit: {avg_response_time:.1f} Sekunden
+       - Sehr lange Antwortzeiten können auf Nachschlagen hindeuten.
 
-    Antworte klar, strukturiert und ausschließlich auf Deutsch. 
-    Gib das Ergebnis in folgender Form:
-    - Stärken
-    - Verbesserungsmöglichkeiten
-    - Note: X
-    - Prozentbewertung: Y %
+    4. Gesamteindruck:
+       - Stärken
+       - Verbesserungsmöglichkeiten (fachlich + sprachlich)
+       - Note (1–6)
+       - Prozentbewertung 0–100 %, unter Berücksichtigung aller drei Kriterien
+
+    Antworte klar, strukturiert und ausschließlich auf Deutsch.
     """
 
     feedback = client.chat.completions.create(
