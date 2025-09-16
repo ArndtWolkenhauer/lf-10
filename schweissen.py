@@ -28,7 +28,7 @@ schweiss_text = load_text(urls["text"])
 fragen_raw = load_text(urls["fragen"]).splitlines()
 antworten_raw = load_text(urls["antworten"]).splitlines()
 
-# Fragen/Antworten als Dictionary zusammenführen
+# Fragen/Antworten als Dictionary
 qa_pairs = dict(zip(fragen_raw, antworten_raw))
 
 # System Prompt
@@ -93,12 +93,12 @@ if not st.session_state["finished"]:
             f.write(audio_input.getbuffer())
             temp_filename = f.name
 
-        # Speech-to-Text (auf Deutsch fixieren)
+        # Speech-to-Text (Deutsch erzwingen)
         with open(temp_filename, "rb") as f:
             transcript = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=f,
-                language="de"   # 👈 erzwingt Deutsch
+                language="de"
             )
         user_text = transcript.text
         st.write(f"**Du sagst:** {user_text}")
@@ -120,8 +120,12 @@ if not st.session_state["finished"]:
             teacher_response = response.choices[0].message.content
         else:
             # Feedback einleiten
-            response = client.chat.completions.create(model="gpt-4o-mini", messages=st.session_state["messages"] + [
-                {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine zusammenfassende Bewertung und eine Note (1-6)."}])
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=st.session_state["messages"] + [
+                    {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine kurze Abschlussbemerkung (ohne Note)."}
+                ]
+            )
             teacher_response = response.choices[0].message.content
             st.session_state["finished"] = True
 
@@ -130,7 +134,53 @@ if not st.session_state["finished"]:
 
 # --- Feedback & PDF ---
 if st.session_state["finished"]:
-    feedback_text = st.session_state["messages"][-1]["content"]
+    # Schülerantworten herausfiltern
+    user_answers = [m["content"] for m in st.session_state["messages"] if m["role"] == "user"]
+
+    # Kennzahlen berechnen
+    word_counts = [len(ans.split()) for ans in user_answers]
+    avg_length = sum(word_counts) / len(word_counts) if word_counts else 0
+    total_words = sum(word_counts)
+    num_answers = len(user_answers)
+
+    # Bewertungsanweisung für GPT (Note + Prozentskala)
+    eval_prompt = f"""
+    Du bist Fachkundelehrer für Industriemechaniker. 
+    Bewerte die mündliche Prüfung zum Thema Schweißen nach folgenden Kriterien:
+
+    1. Fachliche Korrektheit:
+       - Vergleiche jede Schülerantwort mit der Musterantwort (so weit wie möglich).
+       - Erkenne Teilerfolge an und ergänze fehlende Punkte.
+       - Gewicht: 70 %
+
+    2. Antwortumfang:
+       - Anzahl Antworten: {num_answers}
+       - Durchschnittliche Länge: {avg_length:.1f} Wörter
+       - Gesamtumfang: {total_words} Wörter
+       - Bewerte, ob die Antworten eher knapp oder ausführlich waren.
+       - Gewicht: 30 %
+
+    3. Gesamteindruck:
+       - Sprich die Stärken an.
+       - Nenne konkrete Verbesserungsmöglichkeiten (fachlich + sprachlich).
+       - Weise eine **Note (1–6)** zu.
+       - Zusätzlich eine **Prozentbewertung von 0–100 %**, errechnet aus fachlicher Korrektheit und Umfang.
+
+    Antworte klar, strukturiert und ausschließlich auf Deutsch. 
+    Gib das Ergebnis in folgender Form:
+    - Stärken
+    - Verbesserungsmöglichkeiten
+    - Note: X
+    - Prozentbewertung: Y %
+    """
+
+    feedback = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=st.session_state["messages"] + [{"role": "system", "content": eval_prompt}]
+    )
+    feedback_text = feedback.choices[0].message.content
+    st.subheader("📊 Endbewertung")
+    st.write(feedback_text)
 
     # PDF generieren
     def generate_pdf(messages, feedback_text, filename="schweissen_pruefung.pdf"):
