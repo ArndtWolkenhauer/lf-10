@@ -28,24 +28,37 @@ schweiss_text = load_text(urls["text"])
 fragen_raw = load_text(urls["fragen"]).splitlines()
 antworten_raw = load_text(urls["antworten"]).splitlines()
 
+# Fragen/Antworten als Dictionary
 qa_pairs = dict(zip(fragen_raw, antworten_raw))
 
 # System Prompt
 system_prompt = f"""
-Du bist Prüfer für Fachkunde Industriemechaniker (Thema: Schweißen) an einer Berufsschule.
-⚠️ Verhalten: Du prüfst, **erklärst nicht**.  
+Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. 
+Thema: Schweißen.
 
-Regeln:
-- Stelle **genau 5 Prüfungsfragen** aus der Liste.
-- Nach jeder Schülerantwort:
-  1. Prüfe Vollständigkeit, Richtigkeit, Teilkorrektheit.
-  2. Gib kurze Rückmeldung (max. 1-2 Sätze), ggf. kleine Ergänzung.
-  3. Bei Bedarf nur **eine präzise Vertiefungsfrage**.
-- Stelle **keine eigenständigen Erklärungen**, keine Lehrtexte.
-- Antworten sind auf Deutsch, interpretiere alles als Deutsch.
-- Reagiere aktiv auf jede Antwort, bevor du die nächste Prüfungsfrage stellst.
-- Nutze Musterantworten als Referenz: {qa_pairs}
-- Ausgangstext für Schüler: \"\"\"{schweiss_text[:2000]}\"\"\"
+⚠️ Wichtige Regeln:
+- Sprich und antworte **ausschließlich in deutscher Sprache**.
+- Interpretiere Schülerantworten immer als deutschsprachig, auch wenn einzelne englische Wörter vorkommen.
+- Verwende eine klare, einfache Sprache, wie sie in einem Berufsschul-Unterricht üblich ist.
+
+Deine Aufgaben:
+- Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
+- Höre aktiv zu und reagiere immer zuerst auf das, was der Schüler gerade gesagt hat (kurze Bestätigung + passende Nachfrage).
+- Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste.
+- Nutze die angegebenen Musterantworten als Bewertungsgrundlage. 
+  - Wenn der Schüler teilweise richtig liegt, erkenne das an und ergänze die fehlenden Kernelemente.
+  - Erwähne fehlende Inhalte behutsam und praxisnah.
+- Maximal fachlich, praxisnah, mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typischen Fehlerbildern.
+
+Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
+\"\"\"{schweiss_text[:2000]}\"\"\"
+
+Die Prüfung hat genau 5 Fragen.
+Nach jeder Schülerantwort: kurze Würdigung + eine Nachfrage/Vertiefung (aber keine neue Prüfungsfrage).
+Keine Lösungen vorwegnehmen.
+
+Hier sind die Prüfungsfragen mit den Musterantworten:
+{qa_pairs}
 """
 
 st.title("🛠️ Fachkundeprüfung Schweißen – Prüfungs-Simulation")
@@ -58,18 +71,15 @@ if "fragen_gestellt" not in st.session_state:
 if "start_time" not in st.session_state:
     st.session_state["start_time"] = time.time()
 if "answer_times" not in st.session_state:
-    st.session_state["answer_times"] = []  # Zeitpunkte der Antworten
+    st.session_state["answer_times"] = []  # Zeitpunkte der Antworten speichern
 if "finished" not in st.session_state:
     st.session_state["finished"] = False
-if "current_question" not in st.session_state:
-    st.session_state["current_question"] = None
-if "current_status" not in st.session_state:
-    st.session_state["current_status"] = "new"  # new, in_progress, done
 
+# Hilfsfunktion PDF
 def safe_text(text):
     return text.encode('latin-1', errors='replace').decode('latin-1')
 
-# Timer 5 Minuten
+# --- Timer (5 Minuten) ---
 if st.session_state.get("start_time"):
     elapsed = time.time() - st.session_state["start_time"]
     remaining = max(0, 300 - int(elapsed))
@@ -77,7 +87,7 @@ if st.session_state.get("start_time"):
     seconds = remaining % 60
     st.info(f"⏱ Verbleibende Zeit: {minutes:02d}:{seconds:02d}")
 
-# Gespräch
+# --- Gespräch ---
 if not st.session_state["finished"]:
     audio_input = st.audio_input("🎙️ Deine Antwort aufnehmen")
     if audio_input:
@@ -85,6 +95,7 @@ if not st.session_state["finished"]:
             f.write(audio_input.getbuffer())
             temp_filename = f.name
 
+        # Speech-to-Text (Deutsch erzwingen)
         with open(temp_filename, "rb") as f:
             transcript = client.audio.transcriptions.create(
                 model="whisper-1",
@@ -94,9 +105,9 @@ if not st.session_state["finished"]:
         user_text = transcript.text
         st.write(f"**Du sagst:** {user_text}")
 
-        # Antwortzeit
+        # Antwortzeit erfassen
         now = time.time()
-        if st.session_state["current_question"] is not None and st.session_state["current_status"]=="in_progress":
+        if st.session_state["fragen_gestellt"]:
             last_question_time = st.session_state["answer_times"][-1][0]
         else:
             last_question_time = st.session_state["start_time"]
@@ -105,67 +116,74 @@ if not st.session_state["finished"]:
 
         st.session_state["messages"].append({"role": "user", "content": user_text})
 
-        # Lehrer reagiert auf Antwort
-        if st.session_state["current_question"] is None:
+        # Frage auswählen (max 5)
+        if len(st.session_state["fragen_gestellt"]) < 5:
             verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
-            if verbleibend:
-                frage = random.choice(verbleibend)
-                st.session_state["current_question"] = frage
-                st.session_state["fragen_gestellt"].append(frage)
-                st.session_state["current_status"] = "in_progress"
-                st.session_state["answer_times"].append((time.time(), 0))
-            else:
-                st.session_state["finished"] = True
+            frage = random.choice(verbleibend)
+            st.session_state["fragen_gestellt"].append(frage)
+            st.session_state["answer_times"].append((time.time(), 0))  # Zeitpunkt der neuen Frage
 
-        if st.session_state["current_question"] is not None:
-            frage = st.session_state["current_question"]
-            muster = qa_pairs.get(frage, "")
-
+            # Lehrerantwort + Frage
             prompt = st.session_state["messages"] + [{
                 "role": "system",
-                "content": f"""
-                Prüfe die Schülerantwort: "{user_text}"
-                - Vollständig oder unvollständig?
-                - Richtig, teilweise richtig oder falsch?
-                - Ergänze fehlende Punkte maximal 1-2 Sätze.
-                - Stelle **eine kurze vertiefende Frage**, falls nötig.
-                - Nutze Musterantwort als Referenz: {muster}
-                - Antworte nur als Prüfer, erkläre nichts eigenständig.
-                """
+                "content": f"Stelle nun die nächste Prüfungsfrage:\nFrage: {frage}\nMusterantwort: {qa_pairs.get(frage,'')}"
             }]
-
             response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
             teacher_response = response.choices[0].message.content
+        else:
+            # Feedback einleiten
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=st.session_state["messages"] + [
+                    {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine kurze Abschlussbemerkung (ohne Note)."}
+                ]
+            )
+            teacher_response = response.choices[0].message.content
+            st.session_state["finished"] = True
 
-            st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
-            st.write(f"**Prüfer:** {teacher_response}")
+        st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+        st.write(f"**Lehrer:** {teacher_response}")
 
-            st.session_state["current_status"] = "done"
-            st.session_state["current_question"] = None
-
-# Feedback & PDF
+# --- Feedback & PDF ---
 if st.session_state["finished"]:
+    # Schülerantworten herausfiltern
     user_answers = [m["content"] for m in st.session_state["messages"] if m["role"] == "user"]
+
+    # Kennzahlen berechnen
     word_counts = [len(ans.split()) for ans in user_answers]
     avg_length = sum(word_counts) / len(word_counts) if word_counts else 0
     total_words = sum(word_counts)
     num_answers = len(user_answers)
 
-    response_times = [rt for _, rt in st.session_state["answer_times"][1:]]
+    # Durchschnittliche Reaktionszeit berechnen
+    response_times = [rt for _, rt in st.session_state["answer_times"][1:]]  # erste Zeit ignorieren
     avg_response_time = sum(response_times) / len(response_times) if response_times else 0
 
+    # Bewertungsanweisung für GPT (Note + Prozentskala + Reaktionszeit)
     eval_prompt = f"""
-    Du bist Prüfer Fachkunde Industriemechaniker. Bewerte die mündliche Prüfung Schweißen:
-    Kriterien:
-    - Fachliche Korrektheit (60%) - Musterantworten: {qa_pairs}
-    - Antwortumfang (25%) - {num_answers} Antworten, Durchschnitt {avg_length:.1f} Wörter
-    - Reaktionszeit (15%) - Durchschnitt {avg_response_time:.1f} Sekunden
+    Du bist Fachkundelehrer für Industriemechaniker. 
+    Bewerte die mündliche Prüfung zum Thema Schweißen nach folgenden Kriterien:
 
-    Erstelle:
-    - Note (1-6)
-    - Prozentwert 0-100 %
-    - Stärken
-    - Verbesserungsmöglichkeiten
+    1. Fachliche Korrektheit: 60 %
+       - Vergleiche jede Schülerantwort mit der Musterantwort (so weit wie möglich).
+       - Erkenne Teilerfolge an und ergänze fehlende Punkte.
+
+    2. Antwortumfang: 25 %
+       - Anzahl Antworten: {num_answers}
+       - Durchschnittliche Länge: {avg_length:.1f} Wörter
+       - Gesamtumfang: {total_words} Wörter
+
+    3. Reaktionszeit: 15 %
+       - Durchschnittliche Antwortzeit: {avg_response_time:.1f} Sekunden
+       - Sehr lange Antwortzeiten können auf Nachschlagen hindeuten.
+
+    4. Gesamteindruck:
+       - Stärken
+       - Verbesserungsmöglichkeiten (fachlich + sprachlich)
+       - Note (1–6)
+       - Prozentbewertung 0–100 %, unter Berücksichtigung aller drei Kriterien
+
+    Antworte klar, strukturiert und ausschließlich auf Deutsch.
     """
 
     feedback = client.chat.completions.create(
@@ -176,7 +194,7 @@ if st.session_state["finished"]:
     st.subheader("📊 Endbewertung")
     st.write(feedback_text)
 
-    # PDF
+    # PDF generieren
     def generate_pdf(messages, feedback_text, filename="schweissen_pruefung.pdf"):
         pdf = FPDF()
         pdf.add_page()
