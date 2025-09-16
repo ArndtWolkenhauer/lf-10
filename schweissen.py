@@ -36,33 +36,22 @@ system_prompt = f"""
 Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. 
 Thema: Schweißen.
 
-⚠️ Wichtige Regeln:
-- Sprich und antworte **ausschließlich in deutscher Sprache**.
-- Interpretiere Schülerantworten immer als deutschsprachig, auch wenn einzelne englische Wörter vorkommen.
-- Verwende eine klare, einfache Sprache, wie sie in einem Berufsschul-Unterricht üblich ist.
+⚠️ Regeln:
+- Sprich und antworte ausschließlich auf Deutsch.
+- Interpretiere Schülerantworten immer als deutschsprachig.
+- Verwende klare und wertschätzende Sprache.
 
-Deine Aufgaben:
-- Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
-- Höre aktiv zu und reagiere immer zuerst auf das, was der Schüler gerade gesagt hat (kurze Bestätigung + passende Nachfrage).
-- Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste.
-- Nutze die angegebenen Musterantworten als Bewertungsgrundlage. 
-  - Wenn der Schüler teilweise richtig liegt, erkenne das an und ergänze die fehlenden Kernelemente.
-  - Erwähne fehlende Inhalte behutsam und praxisnah.
-- Maximal fachlich, praxisnah, mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typischen Fehlerbildern.
-- Wenn der Schüler unhöflich, respektlos oder beleidigend wird:
-  - Bewahren Sie Ruhe und Professionalität.
-  - Sagen Sie dem Schüler höflich, aber bestimmt, dass ein solches Verhalten im Unterricht nicht akzeptabel ist.
-  - Reduzieren Sie die Endnote um mindestens ein oder zwei Stufen, je nach Schwere.
-  - Reflektieren Sie dieses Verhalten ausdrücklich im abschließenden Feedback.
-
-Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
+Aufgaben:
+- Nach jeder Schülerantwort:
+  1. Gib Anerkennung/Lob für korrekt oder teilweise richtige Inhalte.
+  2. Ergänze fehlende Punkte behutsam, falls unvollständig.
+  3. Korrigiere falsche Aussagen sachlich.
+  4. Stelle ggf. eine **Vertiefungsfrage**, die auf die Antwort eingeht.
+- Stelle nur **eine neue Prüfungsfrage**, wenn die aktuelle vollständig bearbeitet wurde.
+- Grundlage ist der Text:
 \"\"\"{schweiss_text[:2000]}\"\"\"
 
-Die Prüfung hat genau 5 Fragen.
-Nach jeder Schülerantwort: kurze Würdigung + eine Nachfrage/Vertiefung (aber keine neue Prüfungsfrage).
-Keine Lösungen vorwegnehmen.
-
-Hier sind die Prüfungsfragen mit den Musterantworten:
+Die Prüfung hat genau 5 Fragen. Nutze die folgenden Musterantworten zur Bewertung:
 {qa_pairs}
 """
 
@@ -79,6 +68,10 @@ if "answer_times" not in st.session_state:
     st.session_state["answer_times"] = []  # Zeitpunkte der Antworten speichern
 if "finished" not in st.session_state:
     st.session_state["finished"] = False
+if "current_question" not in st.session_state:
+    st.session_state["current_question"] = None
+if "current_status" not in st.session_state:
+    st.session_state["current_status"] = "new"  # new, in_progress, done
 
 # Hilfsfunktion PDF
 def safe_text(text):
@@ -112,7 +105,7 @@ if not st.session_state["finished"]:
 
         # Antwortzeit erfassen
         now = time.time()
-        if st.session_state["fragen_gestellt"]:
+        if st.session_state["current_question"] is not None and st.session_state["current_status"]=="in_progress":
             last_question_time = st.session_state["answer_times"][-1][0]
         else:
             last_question_time = st.session_state["start_time"]
@@ -121,74 +114,75 @@ if not st.session_state["finished"]:
 
         st.session_state["messages"].append({"role": "user", "content": user_text})
 
-        # Frage auswählen (max 5)
-        if len(st.session_state["fragen_gestellt"]) < 5:
+        # --- Lehrer reagiert auf Antwort ---
+        if st.session_state["current_question"] is None:
+            # Neue Frage auswählen
             verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
-            frage = random.choice(verbleibend)
-            st.session_state["fragen_gestellt"].append(frage)
-            st.session_state["answer_times"].append((time.time(), 0))  # Zeitpunkt der neuen Frage
+            if verbleibend:
+                frage = random.choice(verbleibend)
+                st.session_state["current_question"] = frage
+                st.session_state["fragen_gestellt"].append(frage)
+                st.session_state["current_status"] = "in_progress"
+                st.session_state["answer_times"].append((time.time(), 0))  # Fragezeit
+            else:
+                st.session_state["finished"] = True
 
-            # Lehrerantwort + Frage
+        if st.session_state["current_question"] is not None:
+            frage = st.session_state["current_question"]
+            muster = qa_pairs.get(frage, "")
+
             prompt = st.session_state["messages"] + [{
                 "role": "system",
-                "content": f"Stelle nun die nächste Prüfungsfrage:\nFrage: {frage}\nMusterantwort: {qa_pairs.get(frage,'')}"
+                "content": f"""
+                Die Schülerantwort war: "{user_text}"
+                Prüfe sie auf:
+                  - Vollständigkeit
+                  - Richtigkeit
+                  - Teilkorrektheiten
+                Ergänze fehlende Punkte sachlich und praxisnah.
+                Stelle danach eine **Vertiefungsfrage**, die auf die Antwort eingeht.
+                Verwende Musterantwort als Referenz:
+                {muster}
+                Antworte freundlich und wertschätzend.
+                """
             }]
+
             response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
             teacher_response = response.choices[0].message.content
-        else:
-            # Feedback einleiten
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=st.session_state["messages"] + [
-                    {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine kurze Abschlussbemerkung (ohne Note)."}
-                ]
-            )
-            teacher_response = response.choices[0].message.content
-            st.session_state["finished"] = True
 
-        st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
-        st.write(f"**Lehrer:** {teacher_response}")
+            st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+            st.write(f"**Lehrer:** {teacher_response}")
+
+            # Status nach Bearbeitung der Antwort aktualisieren
+            st.session_state["current_status"] = "done"  # nach Vertiefung
+
+            # Nach Bearbeitung der Antwort nächste Frage vorbereiten
+            st.session_state["current_question"] = None
 
 # --- Feedback & PDF ---
 if st.session_state["finished"]:
-    # Schülerantworten herausfiltern
     user_answers = [m["content"] for m in st.session_state["messages"] if m["role"] == "user"]
-
-    # Kennzahlen berechnen
     word_counts = [len(ans.split()) for ans in user_answers]
     avg_length = sum(word_counts) / len(word_counts) if word_counts else 0
     total_words = sum(word_counts)
     num_answers = len(user_answers)
 
-    # Durchschnittliche Reaktionszeit berechnen
     response_times = [rt for _, rt in st.session_state["answer_times"][1:]]  # erste Zeit ignorieren
     avg_response_time = sum(response_times) / len(response_times) if response_times else 0
 
-    # Bewertungsanweisung für GPT (Note + Prozentskala + Reaktionszeit)
     eval_prompt = f"""
     Du bist Fachkundelehrer für Industriemechaniker. 
-    Bewerte die mündliche Prüfung zum Thema Schweißen nach folgenden Kriterien:
+    Bewerte die mündliche Prüfung zum Thema Schweißen nach Kriterien:
 
-    1. Fachliche Korrektheit: 60 %
-       - Vergleiche jede Schülerantwort mit der Musterantwort (so weit wie möglich).
-       - Erkenne Teilerfolge an und ergänze fehlende Punkte.
+    1. Fachliche Korrektheit (60%) - Musterantworten {qa_pairs}
+    2. Antwortumfang (25%) - {num_answers} Antworten, Durchschnittslänge {avg_length:.1f} Wörter
+    3. Reaktionszeit (15%) - Durchschnittliche Antwortzeit {avg_response_time:.1f} Sekunden
 
-    2. Antwortumfang: 25 %
-       - Anzahl Antworten: {num_answers}
-       - Durchschnittliche Länge: {avg_length:.1f} Wörter
-       - Gesamtumfang: {total_words} Wörter
-
-    3. Reaktionszeit: 15 %
-       - Durchschnittliche Antwortzeit: {avg_response_time:.1f} Sekunden
-       - Sehr lange Antwortzeiten können auf Nachschlagen hindeuten.
-
-    4. Gesamteindruck:
-       - Stärken
-       - Verbesserungsmöglichkeiten (fachlich + sprachlich)
-       - Note (1–6)
-       - Prozentbewertung 0–100 %, unter Berücksichtigung aller drei Kriterien
-
-    Antworte klar, strukturiert und ausschließlich auf Deutsch.
+    Erstelle:
+    - Note (1-6)
+    - Prozentwert 0-100 %
+    - Stärken
+    - Verbesserungsmöglichkeiten
     """
 
     feedback = client.chat.completions.create(
@@ -222,4 +216,3 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file, "rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
-
