@@ -30,7 +30,7 @@ antworten = load_file(antworten_url)
 
 # System Prompt
 system_prompt = f"""
-Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. 
+Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule in Niedersachsen. Gesprochen wird ausschließlich deutsch.
 Thema: Schweißen.
 - Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
 - Höre aktiv zu und reagiere immer zuerst auf das, was der Schüler gerade gesagt hat (kurze Bestätigung + passende Nachfrage).
@@ -100,3 +100,4 @@ if st.session_state["finished"]:
     )
     feedback_text = feedback.choices[0].message.content
     st.write(feedback_text)
+
