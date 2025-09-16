@@ -38,8 +38,9 @@ for i, frage in enumerate(fragen):
 
 # System Prompt
 system_prompt = f"""
-Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. 
+Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. Die Schüler sprechen ausschließlich Deutsch.
 Thema: Schweißen.
+- Du führst eine mündliche Prüfung zum Thema Schweiseen durch. Die Schüler haben einen Text und Fragen zu Vorbereitung.
 - Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
 - Höre aktiv zu und reagiere immer zuerst auf das, was der Schüler gerade gesagt hat (kurze Bestätigung + passende Nachfrage).
 - Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste. 
@@ -49,7 +50,7 @@ Thema: Schweißen.
 - Maximal fachlich, praxisnah, mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typ. Fehlerbildern.
 - Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
 \"\"\"{schweiss_text[:2000]}\"\"\"
-- Die Prüfung hat genau 5 Fragen.
+- Die Prüfung hat genau 5 Fragen. Es können sich im Gespräch aber auch zusatzfragen ergeben, die die Benotung bei richtiger Beantwortung positiv beeinflussen.
 - Nach jeder Schülerantwort: kurze Würdigung + eine Nachfrage/Vertiefung (aber keine neue Prüfungsfrage).
 - Keine Lösungen vorwegnehmen.
 
@@ -169,3 +170,4 @@ if st.session_state["finished"] and st.session_state["feedback"]:
     pdf_file = create_pdf(st.session_state["messages"], st.session_state["feedback"])
     with open(pdf_file, "rb") as f:
         st.download_button("⬇️ Prüfungsprotokoll als PDF speichern", f, file_name="pruefung_schweissen.pdf")
+
