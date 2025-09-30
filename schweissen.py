@@ -6,10 +6,10 @@ import requests
 from fpdf import FPDF
 import random
 
-# OpenAI Client initialisieren
+# --- OpenAI Client ---
 client = openai.OpenAI()
 
-# Dateien von GitHub laden
+# --- Dateien von GitHub laden ---
 urls = {
     "text": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-text.txt",
     "fragen": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-fragen.txt",
@@ -27,11 +27,9 @@ def load_text(url):
 schweiss_text = load_text(urls["text"])
 fragen_raw = load_text(urls["fragen"]).splitlines()
 antworten_raw = load_text(urls["antworten"]).splitlines()
-
-# Fragen/Antworten als Dictionary
 qa_pairs = dict(zip(fragen_raw, antworten_raw))
 
-# System Prompt
+# --- System Prompt (komplett, aber bleibt unsichtbar im UI) ---
 system_prompt = f"""
 Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. Du bist auch Schweißexperte und bist fachlich kompetent.
 Thema: Schweißen.
@@ -56,13 +54,13 @@ Deine Aufgaben:
   - Sagen Sie dem Schüler höflich, aber bestimmt, dass ein solches Verhalten im Unterricht nicht akzeptabel ist.
   - Reduzieren Sie die Endnote um mindestens ein oder zwei Stufen, je nach Schwere.
   - Reflektieren Sie dieses Verhalten ausdrücklich im abschließenden Feedback.
-  - Bei wiederholter Unhöflichkeit des schülers reagiere ebenfalls scharf unhöflich (aber nicht beleidigend) und das Ergebnis der Prüfung wird mit der Note 6 bewertet.
+  - Bei wiederholter Unhöflichkeit des Schülers reagiere ebenfalls scharf unhöflich (aber nicht beleidigend) und das Ergebnis der Prüfung wird mit der Note 6 bewertet.
 - Am Ende der 7 Fragen, fragst du ob die Schüler noch weitere Fragen besprechen möchten. 
-  - Wenn der Schüler keine weitere Fragen hat, gibst du dem Schüler eine einfache Frage nach folgendem Muster: Gegeben ist eine Schweißanwendung, bzw, eine zu schweißende Aufgabe, bzw. ein Anwendungsfall und der Schüler soll ein Vorschlag zu einem geeigneten Schweißverfahren nennen und diese Auswahl begründen. Korrigiere und ergänze dieses bei Bedarf ausführlich und fachgerecht.
+  - Wenn der Schüler keine weitere Fragen hat, gibst du dem Schüler eine einfache Frage nach folgendem Muster: Gegeben ist eine Schweißanwendung, bzw. eine zu schweißende Aufgabe, bzw. ein Anwendungsfall und der Schüler soll ein Vorschlag zu einem geeigneten Schweißverfahren nennen und diese Auswahl begründen. Korrigiere und ergänze dieses bei Bedarf ausführlich und fachgerecht.
   - Danach erfolgt die Auswertung.
 
 Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
-\"\"\"{schweiss_text[:2000]}\"\"\"
+\"\"\"{schweiss_text[:2000]}\"\"\" 
 
 Die Prüfung hat genau 7 Fragen aus der gegebenen Liste. Im Gespräch können sich aber gerne auch mehr Fragen ergeben.
 Nach jeder Schülerantwort: kurze Würdigung + eine Nachfrage/Vertiefung (aber keine neue Prüfungsfrage).
@@ -72,6 +70,7 @@ Hier sind die Prüfungsfragen mit den Musterantworten:
 {qa_pairs}
 """
 
+# --- Streamlit Titel ---
 st.title("🛠️ Fachkundeprüfung Schweißen – Prüfungs-Simulation")
 
 # --- Session Variablen ---
@@ -82,64 +81,50 @@ if "fragen_gestellt" not in st.session_state:
 if "start_time" not in st.session_state:
     st.session_state["start_time"] = time.time()
 if "answer_times" not in st.session_state:
-    st.session_state["answer_times"] = []  # Zeitpunkte der Antworten speichern
+    st.session_state["answer_times"] = []
 if "finished" not in st.session_state:
     st.session_state["finished"] = False
-
-# neu: last_input -> um Doppelverarbeitung zu verhindern
 if "last_input" not in st.session_state:
     st.session_state["last_input"] = None
 
-# Hilfsfunktion PDF
+# --- Hilfsfunktion PDF ---
 def safe_text(text):
     return text.encode('latin-1', errors='replace').decode('latin-1')
 
-# --- Timer (5 Minuten) ---
+# --- Timer ---
 if st.session_state.get("start_time"):
     elapsed = time.time() - st.session_state["start_time"]
     remaining = max(0, 300 - int(elapsed))
-    minutes = remaining // 60
-    seconds = remaining % 60
-    st.info(f"⏱ Verbleibende Zeit: {minutes:02d}:{seconds:02d}")
+    st.info(f"⏱ Verbleibende Zeit: {remaining//60:02d}:{remaining%60:02d}")
 
-# === Eingabe-Bereich (Text + Sprache) ===
+# --- Eingabe ---
 st.markdown("### Deine Antwort (sprich oder schreibe):")
-
-# Text-Eingabe mit automatischem Leeren (st.chat_input)
-text_input = st.chat_input("✍️ Tippe deine Antwort und drücke Enter (oder sprich unten).")
-
-# Sprach-Eingabe (Streamlit's audio_input). Wenn du lokal testen willst, diese liefert ein BytesIO-Objekt.
+text_input = st.chat_input("✍️ Tippe deine Antwort und drücke Enter")
 audio_input = st.audio_input("🎙️ Oder antworte per Sprache (Aufnahme starten)")
 
-# Hilfsfunktion: Eingabe verarbeiten (gleiches Verhalten für Text & Audio)
+# --- Eingabe verarbeiten ---
 def process_user_input(user_text: str):
-    # Verhindern, dass gleiche Eingabe mehrfach verarbeitet wird
     if not user_text:
         return None
     if user_text == st.session_state["last_input"]:
         return None
     st.session_state["last_input"] = user_text
 
-    # Antwortzeit erfassen
     now = time.time()
     if st.session_state["answer_times"]:
-        last_question_time = st.session_state["answer_times"][-1][0]
+        last_q_time = st.session_state["answer_times"][-1][0]
     else:
-        last_question_time = st.session_state["start_time"]
-    response_time = now - last_question_time
+        last_q_time = st.session_state["start_time"]
+    response_time = now - last_q_time
     st.session_state["answer_times"].append((now, response_time))
 
-    # Nachricht speichern
     st.session_state["messages"].append({"role": "user", "content": user_text})
 
-    # Frage auswählen (wie vorher: max 5 in original code — ich belasse die Logik unverändert)
-    if len(st.session_state["fragen_gestellt"]) < 5:
+    if len(st.session_state["fragen_gestellt"]) < 7:
         verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
         frage = random.choice(verbleibend)
         st.session_state["fragen_gestellt"].append(frage)
-        st.session_state["answer_times"].append((time.time(), 0))  # Zeitpunkt der neuen Frage
-
-        # Lehrerantwort + Frage
+        st.session_state["answer_times"].append((time.time(), 0))
         prompt = st.session_state["messages"] + [{
             "role": "system",
             "content": f"Stelle nun die nächste Prüfungsfrage:\nFrage: {frage}\nMusterantwort: {qa_pairs.get(frage,'')}"
@@ -147,7 +132,6 @@ def process_user_input(user_text: str):
         response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
         teacher_response = response.choices[0].message.content
     else:
-        # Feedback einleiten
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=st.session_state["messages"] + [
@@ -160,20 +144,17 @@ def process_user_input(user_text: str):
     st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
     return teacher_response
 
-# --- Verarbeitung: wenn Text eingegeben wurde ---
+# --- Text-Eingabe ---
 if text_input:
-    # chat_input leert sich automatisch nach Submit; process_user_input behandelt Duplikate
     teacher_resp = process_user_input(text_input)
     if teacher_resp is not None:
-        st.write(f"**Lehrer:** {teacher_resp}")
+        st.chat_message("assistant").write(teacher_resp)
 
-# --- Verarbeitung: wenn Audio eingegeben wurde ---
+# --- Audio-Eingabe ---
 if audio_input:
-    # Speech-to-Text (Deutsch erzwingen)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
         f.write(audio_input.getbuffer())
         temp_filename = f.name
-
     with open(temp_filename, "rb") as f:
         transcript = client.audio.transcriptions.create(
             model="whisper-1",
@@ -185,23 +166,15 @@ if audio_input:
         st.write(f"**Du sagst:** {user_text_from_audio}")
         teacher_resp = process_user_input(user_text_from_audio)
         if teacher_resp is not None:
-            st.write(f"**Lehrer:** {teacher_resp}")
-
-# === Falls bereits Nachrichten vorhanden: Verlauf anzeigen (optional) ===
-st.markdown("### Gesprächsverlauf")
-for msg in st.session_state["messages"]:
-    role = "Lehrer" if msg["role"] == "assistant" else ("System" if msg["role"] == "system" else "Schüler")
-    st.write(f"**{role}:** {msg['content']}")
+            st.chat_message("assistant").write(teacher_resp)
 
 # --- Feedback & PDF ---
 if st.session_state["finished"]:
     user_answers = [m["content"] for m in st.session_state["messages"] if m["role"] == "user"]
-
     word_counts = [len(ans.split()) for ans in user_answers]
     avg_length = sum(word_counts) / len(word_counts) if word_counts else 0
     total_words = sum(word_counts)
     num_answers = len(user_answers)
-
     response_times = [rt for _, rt in st.session_state["answer_times"][1:]]
     avg_response_time = sum(response_times) / len(response_times) if response_times else 0
 
@@ -210,23 +183,13 @@ if st.session_state["finished"]:
     Bewerte die mündliche Prüfung zum Thema Schweißen nach folgenden Kriterien:
 
     1. Fachliche Korrektheit: 60 %
-       - Vergleiche jede Schülerantwort mit der Musterantwort (so weit wie möglich).
-       - Erkenne Teilerfolge an und ergänze fehlende Punkte.
-
-    2. Antwortumfang: 25 %
-       - Anzahl Antworten: {num_answers}
-       - Durchschnittliche Länge: {avg_length:.1f} Wörter
-       - Gesamtumfang: {total_words} Wörter
-
-    3. Reaktionszeit: 15 %
-       - Durchschnittliche Antwortzeit: {avg_response_time:.1f} Sekunden
-       - Sehr lange Antwortzeiten können auf Nachschlagen hindeuten.
-
+    2. Antwortumfang: 25 % – Antworten: {num_answers}, ∅ Länge: {avg_length:.1f} Wörter, Gesamt: {total_words}
+    3. Reaktionszeit: 15 % – ∅ {avg_response_time:.1f} Sekunden
     4. Gesamteindruck:
        - Stärken
-       - Verbesserungsmöglichkeiten (fachlich + sprachlich)
+       - Verbesserungsmöglichkeiten
        - Note (1–6)
-       - Prozentbewertung 0–100 %, unter Berücksichtigung aller drei Kriterien
+       - Prozentbewertung 0–100 %
 
     Antworte klar, strukturiert und ausschließlich auf Deutsch.
     """
@@ -261,3 +224,4 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file, "rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
+
