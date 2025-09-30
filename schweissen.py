@@ -106,19 +106,21 @@ def process_user_input(user_text: str):
     if any(g in user_text.lower() for g in ["guten morgen", "hallo", "hi", "servus"]):
         teacher_response = "Hallo! Schön, dass du da bist. Lass uns mit der Prüfung beginnen."
         st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+
+        # --- Erste Frage erst nach Smalltalk ---
+        if not st.session_state["first_question_given"]:
+            verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
+            if verbleibend:
+                frage = random.choice(verbleibend)
+                st.session_state["fragen_gestellt"].append(frage)
+                st.session_state["answer_times"].append((time.time(), 0))
+                st.session_state["first_question_given"] = True
+                st.session_state["messages"].append({"role": "assistant", "content": f"Erste Prüfungsfrage: {frage}"})
         return teacher_response
 
-    # --- Schritt 2: Erste Frage stellen, falls noch nicht gegeben ---
+    # --- Schritt 2: Wenn Smalltalk noch nicht erfolgt, keine Frage ---
     if not st.session_state["first_question_given"]:
-        verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
-        if verbleibend:
-            frage = random.choice(verbleibend)
-            st.session_state["fragen_gestellt"].append(frage)
-            st.session_state["answer_times"].append((time.time(), 0))
-            st.session_state["first_question_given"] = True
-            teacher_response = f"Erste Prüfungsfrage: {frage}"
-            st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
-            return teacher_response
+        return None
 
     # --- Schritt 3: Auf fachliche Antwort reagieren ---
     prompt = st.session_state["messages"] + [{
