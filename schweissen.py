@@ -56,6 +56,7 @@ Deine Aufgaben:
   - Sagen Sie dem Schüler höflich, aber bestimmt, dass ein solches Verhalten im Unterricht nicht akzeptabel ist.
   - Reduzieren Sie die Endnote um mindestens ein oder zwei Stufen, je nach Schwere.
   - Reflektieren Sie dieses Verhalten ausdrücklich im abschließenden Feedback.
+  - Bei wiederholter Unhöflichkeit des schülers reagiere ebenfalls scharf unhöflich (aber nicht beleidigend) und das Ergebnis der Prüfung wird mit der Note 6 bewertet.
 - Am Ende der 7 Fragen, fragst du ob die Schüler noch weitere Fragen besprechen möchten. 
   - Wenn der Schüler keine weitere Fragen hat, gibst du dem Schüler eine einfache Frage nach folgendem Muster: Gegeben ist eine Schweißanwendung, bzw, eine zu schweißende Aufgabe, bzw. ein Anwendungsfall und der Schüler soll ein Vorschlag zu einem geeigneten Schweißverfahren nennen und diese Auswahl begründen. Korrigiere und ergänze dieses bei Bedarf ausführlich und fachgerecht.
   - Danach erfolgt die Auswertung.
@@ -100,13 +101,18 @@ if st.session_state.get("start_time"):
 
 # --- Gespräch ---
 if not st.session_state["finished"]:
-    audio_input = st.audio_input("🎙️ Deine Antwort aufnehmen")
+    st.markdown("### Deine Antwort:")
+    audio_input = st.audio_input("🎙️ Antwort aufnehmen")
+    text_input = st.text_input("✍️ Oder hier schreiben")
+
+    user_text = None
+
+    # Sprach-Antwort
     if audio_input:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
             f.write(audio_input.getbuffer())
             temp_filename = f.name
 
-        # Speech-to-Text (Deutsch erzwingen)
         with open(temp_filename, "rb") as f:
             transcript = client.audio.transcriptions.create(
                 model="whisper-1",
@@ -116,6 +122,12 @@ if not st.session_state["finished"]:
         user_text = transcript.text
         st.write(f"**Du sagst:** {user_text}")
 
+    # Text-Antwort
+    elif text_input:
+        user_text = text_input
+        st.write(f"**Du schreibst:** {user_text}")
+
+    if user_text:
         # Antwortzeit erfassen
         now = time.time()
         if st.session_state["fragen_gestellt"]:
@@ -157,20 +169,16 @@ if not st.session_state["finished"]:
 
 # --- Feedback & PDF ---
 if st.session_state["finished"]:
-    # Schülerantworten herausfiltern
     user_answers = [m["content"] for m in st.session_state["messages"] if m["role"] == "user"]
 
-    # Kennzahlen berechnen
     word_counts = [len(ans.split()) for ans in user_answers]
     avg_length = sum(word_counts) / len(word_counts) if word_counts else 0
     total_words = sum(word_counts)
     num_answers = len(user_answers)
 
-    # Durchschnittliche Reaktionszeit berechnen
-    response_times = [rt for _, rt in st.session_state["answer_times"][1:]]  # erste Zeit ignorieren
+    response_times = [rt for _, rt in st.session_state["answer_times"][1:]]
     avg_response_time = sum(response_times) / len(response_times) if response_times else 0
 
-    # Bewertungsanweisung für GPT (Note + Prozentskala + Reaktionszeit)
     eval_prompt = f"""
     Du bist Fachkundelehrer für Industriemechaniker. 
     Bewerte die mündliche Prüfung zum Thema Schweißen nach folgenden Kriterien:
@@ -205,7 +213,6 @@ if st.session_state["finished"]:
     st.subheader("📊 Endbewertung")
     st.write(feedback_text)
 
-    # PDF generieren
     def generate_pdf(messages, feedback_text, filename="schweissen_pruefung.pdf"):
         pdf = FPDF()
         pdf.add_page()
@@ -228,9 +235,3 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file, "rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
-
-
-
-
-
-
