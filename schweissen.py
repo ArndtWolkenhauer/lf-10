@@ -72,6 +72,10 @@ if "finished" not in st.session_state:
     st.session_state["finished"] = False
 if "last_input" not in st.session_state:
     st.session_state["last_input"] = None
+if "current_question" not in st.session_state:
+    st.session_state["current_question"] = None
+if "awaiting_answer" not in st.session_state:
+    st.session_state["awaiting_answer"] = False
 
 # --- Hilfsfunktion PDF ---
 def safe_text(text):
@@ -109,26 +113,36 @@ def process_user_input(user_text: str):
 
     st.session_state["messages"].append({"role": "user", "content": user_text})
 
-    # Nächste Frage / Abschluss
-    if len(st.session_state["fragen_gestellt"]) < 7:
+    # --- Wenn keine aktuelle Frage, neue auswählen ---
+    if st.session_state["current_question"] is None and len(st.session_state["fragen_gestellt"]) < 7:
         verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
         frage = random.choice(verbleibend)
+        st.session_state["current_question"] = frage
         st.session_state["fragen_gestellt"].append(frage)
+        st.session_state["awaiting_answer"] = True
         st.session_state["answer_times"].append((time.time(), 0))
-        prompt = st.session_state["messages"] + [{
+        prompt_msg = [{
             "role": "system",
-            "content": f"Stelle nun die nächste Prüfungsfrage:\nFrage: {frage}\nMusterantwort: {qa_pairs.get(frage,'')}"
+            "content": f"Stelle die Prüfungsfrage:\nFrage: {frage}\nMusterantwort: {qa_pairs.get(frage,'')}"
         }]
-        response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
+        response = client.chat.completions.create(model="gpt-4o-mini", messages=st.session_state["messages"] + prompt_msg)
         teacher_response = response.choices[0].message.content
+    # --- Wenn auf aktuelle Antwort reagieren ---
+    elif st.session_state["awaiting_answer"]:
+        prompt_msg = [{
+            "role": "system",
+            "content": f"Reagiere auf die Antwort des Schülers und stelle bei Bedarf eine vertiefende Rückfrage zur Frage: {st.session_state['current_question']}\nMusterantwort: {qa_pairs.get(st.session_state['current_question'],'')}"
+        }]
+        response = client.chat.completions.create(model="gpt-4o-mini", messages=st.session_state["messages"] + prompt_msg)
+        teacher_response = response.choices[0].message.content
+
+        # --- Prüfen, ob Vertiefung beendet ist ---
+        # Hier nehmen wir an: nach jeder Reaktion des Bots wird eine Frage als abgeschlossen markiert
+        st.session_state["awaiting_answer"] = False
+        st.session_state["current_question"] = None
     else:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=st.session_state["messages"] + [
-                {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine kurze Abschlussbemerkung (ohne Note)."}
-            ]
-        )
-        teacher_response = response.choices[0].message.content
+        # Prüfung abgeschlossen
+        teacher_response = "Die Prüfung ist abgeschlossen."
         st.session_state["finished"] = True
 
     st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
