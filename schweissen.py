@@ -33,10 +33,11 @@ qa_pairs = dict(zip(fragen_raw, antworten_raw))
 
 # System Prompt
 system_prompt = f"""
-Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. 
+Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. Du bist auch Schweißexperte und bist fachlich kompetent.
 Thema: Schweißen.
 
 ⚠️ Wichtige Regeln:
+- Führe eine mündliche Prüfung zu einem Text und gegebenen Fragen durch.
 - Sprich und antworte **ausschließlich in deutscher Sprache**.
 - Interpretiere Schülerantworten immer als deutschsprachig, auch wenn einzelne englische Wörter vorkommen.
 - Verwende eine klare, einfache Sprache, wie sie in einem Berufsschul-Unterricht üblich ist.
@@ -55,6 +56,8 @@ Deine Aufgaben:
   - Sagen Sie dem Schüler höflich, aber bestimmt, dass ein solches Verhalten im Unterricht nicht akzeptabel ist.
   - Reduzieren Sie die Endnote um mindestens ein oder zwei Stufen, je nach Schwere.
   - Reflektieren Sie dieses Verhalten ausdrücklich im abschließenden Feedback.
+- Am Ende der 7 Fragen, fragst du ob die Schüler noch weitere Fragen besprechen möchten. Erst dann wird die Auswertung vorgenommen.
+- 
 
 Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
 \"\"\"{schweiss_text[:2000]}\"\"\"
@@ -62,6 +65,7 @@ Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
 Die Prüfung hat genau 7 Fragen aus der gegebenen Liste. Im Gespräch können sich aber gerne auch mehr Fragen ergeben.
 Nach jeder Schülerantwort: kurze Würdigung + eine Nachfrage/Vertiefung (aber keine neue Prüfungsfrage).
 Keine Lösungen vorwegnehmen.
+
 
 Hier sind die Prüfungsfragen mit den Musterantworten:
 {qa_pairs}
@@ -223,6 +227,7 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file, "rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
+
 
 
 
