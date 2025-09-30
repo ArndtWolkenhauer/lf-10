@@ -31,42 +31,6 @@ antworten_raw = load_text(urls["antworten"]).splitlines()
 # Fragen/Antworten als Dictionary
 qa_pairs = dict(zip(fragen_raw, antworten_raw))
 
-# System Prompt
-system_prompt = f"""
-Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. Du bist auch Schweißexperte und bist fachlich kompetent.
-Thema: Schweißen.
-
-⚠️ Wichtige Regeln:
-- Führe eine mündliche Prüfung zu einem Text und gegebenen Fragen durch.
-- Sprich und antworte **ausschließlich in deutscher Sprache**.
-- Interpretiere Schülerantworten immer als deutschsprachig, auch wenn einzelne englische Wörter vorkommen.
-- Verwende eine klare, einfache Sprache, wie sie in einem Berufsschul-Unterricht üblich ist.
-
-Deine Aufgaben:
-- Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
-- Höre aktiv zu und reagiere **immer zuerst auf das, was der Schüler gerade gesagt hat** (kurze Bestätigung + passende Nachfrage).
-- **Reagiere auf die Antwort des Schülers mit einer ergänzenden oder vertiefenden Nachfrage.**
-- Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste.
-- Nutze die angegebenen Musterantworten als Bewertungsgrundlage. 
-  - Wenn der Schüler teilweise richtig liegt, erkenne das an und ergänze die fehlenden Kernelemente.
-  - Erwähne fehlende Inhalte behutsam und praxisnah.
-- Maximal fachlich, praxisnah, mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typischen Fehlerbildern.
-- Wenn der Schüler unhöflich, respektlos oder beleidigend wird:
-  - Bewahren Sie Ruhe und Professionalität.
-  - Sagen Sie dem Schüler höflich, aber bestimmt, dass ein solches Verhalten im Unterricht nicht akzeptabel ist.
-  - Reduzieren Sie die Endnote um mindestens ein oder zwei Stufen, je nach Schwere.
-  - Reflektieren Sie dieses Verhalten ausdrücklich im abschließenden Feedback.
-  - Bei wiederholter Unhöflichkeit des schülers reagiere ebenfalls scharf unhöflich (aber nicht beleidigend) und das Ergebnis der Prüfung wird mit der Note 6 bewertet.
-- Am Ende der 7 Fragen, gibst du dem Schüler eine letzte einfache Frage nach folgendem Muster: Gegeben ist eine Schweißanwendung, bzw, eine zu schweißende Aufgabe, bzw. ein Anwendungsfall und der Schüler soll ein Vorschlag zu einem geeigneten Schweißverfahren nennen und diese Auswahl begründen. Korrigiere und ergänze dieses bei Bedarf ausführlich und fachgerecht.
-  - Danach erfolgt die Auswertung.
-
-Grundlage ist folgender Text, den die Schüler vorher gelesen haben (nicht anzeigen!):
-\"\"\"{schweiss_text[:2000]}\"\"\"
-
-Hier sind die Prüfungsfragen mit den Musterantworten:
-{qa_pairs}
-"""
-
 st.title("🛠️ Fachkundeprüfung Schweißen – Prüfungs-Simulation")
 
 # --- Session Variablen ---
@@ -101,47 +65,68 @@ def process_user_input(user_text: str):
         return None
     st.session_state["last_input"] = user_text
 
+    # Antwortzeit erfassen
     now = time.time()
     last_question_time = st.session_state["answer_times"][-1][0] if st.session_state["answer_times"] else st.session_state["start_time"]
     response_time = now - last_question_time
     st.session_state["answer_times"].append((now, response_time))
+
+    # Schülerantwort speichern
     st.session_state["messages"].append({"role": "user", "content": user_text})
 
-    # Lehrerantwort + nächste Frage
+    # --- Schritt 1: Bot reagiert auf die Schülerantwort ---
+    prompt = st.session_state["messages"] + [{
+        "role": "system",
+        "content": (
+            "Reagiere auf die Antwort des Schülers wertschätzend und fachlich korrekt. "
+            "Keine neue Prüfungsfrage stellen. Nutze die Musterantwort nur intern zur Bewertung."
+        )
+    }]
+    response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
+    teacher_response = response.choices[0].message.content
+    st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+
+    # --- Schritt 2: Neue Prüfungsfrage, wenn noch nicht alle gestellt ---
     if len(st.session_state["fragen_gestellt"]) < 7:
         verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
-        frage = random.choice(verbleibend)
-        st.session_state["fragen_gestellt"].append(frage)
-        st.session_state["answer_times"].append((time.time(), 0))
-
-        prompt = st.session_state["messages"] + [{
-            "role": "system",
-            "content": f"Stelle nun die nächste Prüfungsfrage:\nFrage: {frage}\nAntworte nur mit der Frage, zeige die Musterantwort nicht."
-        }]
-        response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
-        teacher_response = response.choices[0].message.content
+        if verbleibend:
+            frage = random.choice(verbleibend)
+            st.session_state["fragen_gestellt"].append(frage)
+            st.session_state["answer_times"].append((time.time(), 0))
+            # Frage als neue Nachricht vom Bot
+            st.session_state["messages"].append({"role": "assistant", "content": f"Neue Prüfungsfrage: {frage}"})
     else:
+        # Prüfung vorbei: Abschlussbemerkung
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=st.session_state["messages"] + [
                 {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine kurze Abschlussbemerkung (ohne Note)."}
             ]
         )
-        teacher_response = response.choices[0].message.content
+        final_msg = response.choices[0].message.content
+        st.session_state["messages"].append({"role": "assistant", "content": final_msg})
         st.session_state["finished"] = True
 
-    st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
     return teacher_response
 
 # === Chatverlauf anzeigen mit Farben + Eingabefelder unten ===
 st.markdown("### Gesprächsverlauf")
 for msg in st.session_state["messages"]:
     if msg["role"] == "user":
-        st.markdown(f"<div style='background-color:#D0E7FF;padding:8px;border-radius:5px;margin-bottom:5px'><b>Schüler:</b> {msg['content']}</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background-color:#D0E7FF;padding:8px;border-radius:5px;margin-bottom:5px'>"
+            f"<b>Schüler:</b> {msg['content']}</div>", unsafe_allow_html=True
+        )
     elif msg["role"] == "assistant":
-        st.markdown(f"<div style='background-color:#FFF4B1;padding:8px;border-radius:5px;margin-bottom:5px'><b>Lehrer:</b> {msg['content']}</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background-color:#FFF4B1;padding:8px;border-radius:5px;margin-bottom:5px'>"
+            f"<b>Lehrer:</b> {msg['content']}</div>", unsafe_allow_html=True
+        )
     else:
-        st.markdown(f"<div style='background-color:#E0E0E0;padding:8px;border-radius:5px;margin-bottom:5px'><b>System:</b> {msg['content']}</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background-color:#E0E0E0;padding:8px;border-radius:5px;margin-bottom:5px'>"
+            f"<b>System:</b> {msg['content']}</div>", unsafe_allow_html=True
+        )
 
 # --- Eingabebereich ---
 st.markdown("### Deine Antwort (Text oder Sprache)")
@@ -160,12 +145,18 @@ elif audio_input:
         transcript = client.audio.transcriptions.create(model="whisper-1", file=f, language="de")
     user_text = transcript.text
     if user_text:
-        st.markdown(f"<div style='background-color:#D0E7FF;padding:8px;border-radius:5px;margin-bottom:5px'><b>Du sagst:</b> {user_text}</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background-color:#D0E7FF;padding:8px;border-radius:5px;margin-bottom:5px'>"
+            f"<b>Du sagst:</b> {user_text}</div>", unsafe_allow_html=True
+        )
 
 if user_text:
     teacher_resp = process_user_input(user_text)
     if teacher_resp:
-        st.markdown(f"<div style='background-color:#FFF4B1;padding:8px;border-radius:5px;margin-bottom:5px'><b>Lehrer:</b> {teacher_resp}</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background-color:#FFF4B1;padding:8px;border-radius:5px;margin-bottom:5px'>"
+            f"<b>Lehrer:</b> {teacher_resp}</div>", unsafe_allow_html=True
+        )
 
 # --- Feedback & PDF ---
 if st.session_state["finished"]:
@@ -195,6 +186,7 @@ if st.session_state["finished"]:
     st.subheader("📊 Endbewertung")
     st.write(feedback_text)
 
+    # PDF generieren
     def generate_pdf(messages, feedback_text, filename="schweissen_pruefung.pdf"):
         pdf = FPDF()
         pdf.add_page()
@@ -217,4 +209,3 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file,"rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
-
