@@ -41,30 +41,20 @@ Thema: Schweißen.
 - Sprich und antworte **ausschließlich in deutscher Sprache**.
 - Interpretiere Schülerantworten immer als deutschsprachig, auch wenn einzelne englische Wörter vorkommen.
 - Verwende eine klare, einfache Sprache, wie sie in einem Berufsschul-Unterricht üblich ist.
+- Stelle Smalltalk nur kurz fest und gehe nicht fachlich tief darauf ein.
 
 Deine Aufgaben:
-- Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
-- Höre aktiv zu und reagiere **immer zuerst auf das, was der Schüler gerade gesagt hat** (kurze Bestätigung + passende Nachfrage).
-- **Reagiere auf die Antwort des Schülers mit einer ergänzenden oder vertiefenden Nachfrage.**
+- Höre aktiv zu und reagiere **zuerst auf das, was der Schüler sagt**.
+- Danach stelle die Prüfungsfrage (erst, wenn noch keine gestellt wurde).
+- Reagiere auf fachliche Antworten nur mit ergänzender Nachfrage oder Vertiefung.
 - Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste.
-- Nutze die angegebenen Musterantworten als Bewertungsgrundlage. 
-  - Wenn der Schüler teilweise richtig liegt, erkenne das an und ergänze die fehlenden Kernelemente.
-  - Erwähne fehlende Inhalte behutsam und praxisnah.
-- Maximal fachlich, praxisnah, mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typischen Fehlerbildern.
-- Wenn der Schüler unhöflich, respektlos oder beleidigend wird:
-  - Bewahren Sie Ruhe und Professionalität.
-  - Sagen Sie dem Schüler höflich, aber bestimmt, dass ein solches Verhalten im Unterricht nicht akzeptabel ist.
-  - Reduzieren Sie die Endnote um mindestens ein oder zwei Stufen, je nach Schwere.
-  - Reflektieren Sie dieses Verhalten ausdrücklich im abschließenden Feedback.
-  - Bei wiederholter Unhöflichkeit des schülers reagiere ebenfalls scharf unhöflich (aber nicht beleidigend) und das Ergebnis der Prüfung wird mit der Note 6 bewertet.
-- Am Ende der 7 Fragen, gibst du dem Schüler eine letzte einfache Frage nach folgendem Muster: Gegeben ist eine Schweißanwendung, bzw, eine zu schweißende Aufgabe, bzw. ein Anwendungsfall und der Schüler soll ein Vorschlag zu einem geeigneten Schweißverfahren nennen und diese Auswahl begründen. Korrigiere und ergänze dieses bei Bedarf ausführlich und fachgerecht.
-  - Danach erfolgt die Auswertung.
+- Nutze die Musterantwort nur intern zur Bewertung.
+- Maximal praxisnah, mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typischen Fehlerbildern.
+- Bei unhöflichem Verhalten: höflich aber bestimmt, ggf. Note reduzieren.
+- Nach 7 Fragen: letzte einfache Anwendungsfrage, danach Auswertung.
 
 Grundlage ist folgender Text, den die Schüler vorher gelesen haben (nicht anzeigen!):
 \"\"\"{schweiss_text[:2000]}\"\"\"
-
-Hier sind die Prüfungsfragen mit den Musterantworten:
-{qa_pairs}
 """
 
 st.title("🛠️ Fachkundeprüfung Schweißen – Prüfungs-Simulation")
@@ -82,6 +72,8 @@ if "finished" not in st.session_state:
     st.session_state["finished"] = False
 if "last_input" not in st.session_state:
     st.session_state["last_input"] = None
+if "first_question_given" not in st.session_state:
+    st.session_state["first_question_given"] = False
 
 # Hilfsfunktion PDF
 def safe_text(text):
@@ -110,11 +102,29 @@ def process_user_input(user_text: str):
     # Schülerantwort speichern
     st.session_state["messages"].append({"role": "user", "content": user_text})
 
-    # --- Schritt 1: Bot reagiert auf die Schülerantwort ---
+    # --- Schritt 1: Smalltalk erkennen ---
+    if any(g in user_text.lower() for g in ["guten morgen", "hallo", "hi", "servus"]):
+        teacher_response = "Hallo! Schön, dass du da bist. Lass uns mit der Prüfung beginnen."
+        st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+        return teacher_response
+
+    # --- Schritt 2: Erste Frage stellen, falls noch nicht gegeben ---
+    if not st.session_state["first_question_given"]:
+        verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
+        if verbleibend:
+            frage = random.choice(verbleibend)
+            st.session_state["fragen_gestellt"].append(frage)
+            st.session_state["answer_times"].append((time.time(), 0))
+            st.session_state["first_question_given"] = True
+            teacher_response = f"Erste Prüfungsfrage: {frage}"
+            st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+            return teacher_response
+
+    # --- Schritt 3: Auf fachliche Antwort reagieren ---
     prompt = st.session_state["messages"] + [{
         "role": "system",
         "content": (
-            "Reagiere auf die Antwort des Schülers wertschätzend und fachlich korrekt. "
+            "Reagiere wertschätzend und fachlich korrekt auf die Antwort des Schülers. "
             "Keine neue Prüfungsfrage stellen. Nutze die Musterantwort nur intern zur Bewertung."
         )
     }]
@@ -122,17 +132,16 @@ def process_user_input(user_text: str):
     teacher_response = response.choices[0].message.content
     st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
 
-    # --- Schritt 2: Neue Prüfungsfrage, wenn noch nicht alle gestellt ---
+    # --- Schritt 4: Neue Frage stellen, wenn noch nicht alle 7 ---
     if len(st.session_state["fragen_gestellt"]) < 7:
         verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
         if verbleibend:
             frage = random.choice(verbleibend)
             st.session_state["fragen_gestellt"].append(frage)
             st.session_state["answer_times"].append((time.time(), 0))
-            # Frage als neue Nachricht vom Bot
             st.session_state["messages"].append({"role": "assistant", "content": f"Neue Prüfungsfrage: {frage}"})
     else:
-        # Prüfung vorbei: Abschlussbemerkung
+        # Prüfung vorbei
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=st.session_state["messages"] + [
@@ -209,11 +218,27 @@ if st.session_state["finished"]:
     Bewerte die mündliche Prüfung zum Thema Schweißen nach folgenden Kriterien:
 
     1. Fachliche Korrektheit: 60 %
+       - Vergleiche jede Schülerantwort mit der Musterantwort (so weit wie möglich).
+       - Erkenne Teilerfolge an und ergänze fehlende Punkte.
+
     2. Antwortumfang: 25 %
+       - Anzahl Antworten: {num_answers}
+       - Durchschnittliche Länge: {avg_length:.1f} Wörter
+       - Gesamtumfang: {total_words} Wörter
+
     3. Reaktionszeit: 15 %
-    4. Gesamteindruck
+       - Durchschnittliche Antwortzeit: {avg_response_time:.1f} Sekunden
+       - Sehr lange Antwortzeiten können auf Nachschlagen hindeuten.
+
+    4. Gesamteindruck:
+       - Stärken
+       - Verbesserungsmöglichkeiten (fachlich + sprachlich)
+       - Note (1–6)
+       - Prozentbewertung 0–100 %, unter Berücksichtigung aller drei Kriterien
+
     Antworte klar, strukturiert und ausschließlich auf Deutsch.
     """
+
     feedback = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=st.session_state["messages"] + [{"role":"system","content": eval_prompt}]
@@ -245,4 +270,3 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file,"rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
-
