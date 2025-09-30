@@ -101,6 +101,7 @@ text_input = st.chat_input("✍️ Tippe deine Antwort und drücke Enter")
 audio_input = st.audio_input("🎙️ Oder antworte per Sprache (Aufnahme starten)")
 
 # --- Eingabe verarbeiten ---
+# --- Eingabe verarbeiten ---
 def process_user_input(user_text: str):
     if not user_text or user_text == st.session_state["last_input"]:
         return None
@@ -127,26 +128,29 @@ def process_user_input(user_text: str):
         }]
         response = client.chat.completions.create(model="gpt-4o-mini", messages=st.session_state["messages"] + prompt_msg)
         teacher_response = response.choices[0].message.content
-    # --- Wenn auf aktuelle Antwort reagieren ---
+
+    # --- Wenn auf aktuelle Antwort reagieren (Vertiefung) ---
     elif st.session_state["awaiting_answer"]:
         prompt_msg = [{
             "role": "system",
-            "content": f"Reagiere auf die Antwort des Schülers und stelle bei Bedarf eine vertiefende Rückfrage zur Frage: {st.session_state['current_question']}\nMusterantwort: {qa_pairs.get(st.session_state['current_question'],'')}"
+            "content": f"Reagiere auf die Antwort des Schülers zur aktuellen Frage: {st.session_state['current_question']}.\n"
+                       f"Integriere die Schülerantwort und stelle ggf. eine vertiefende Rückfrage, ohne die nächste Frage zu starten.\n"
+                       f"Musterantwort: {qa_pairs.get(st.session_state['current_question'],'')}"
         }]
         response = client.chat.completions.create(model="gpt-4o-mini", messages=st.session_state["messages"] + prompt_msg)
         teacher_response = response.choices[0].message.content
 
-        # --- Prüfen, ob Vertiefung beendet ist ---
-        # Hier nehmen wir an: nach jeder Reaktion des Bots wird eine Frage als abgeschlossen markiert
+        # Nach der Rückfrage ist die Frage abgeschlossen, nächste Frage wird später geholt
         st.session_state["awaiting_answer"] = False
         st.session_state["current_question"] = None
+
     else:
-        # Prüfung abgeschlossen
         teacher_response = "Die Prüfung ist abgeschlossen."
         st.session_state["finished"] = True
 
     st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
     return teacher_response
+
 
 # --- Text-Eingabe ---
 if text_input:
@@ -221,3 +225,4 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file, "rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
+
