@@ -116,7 +116,7 @@ def process_user_input(user_text: str):
 
         prompt = st.session_state["messages"] + [{
             "role": "system",
-            "content": f"Stelle nun die nächste Prüfungsfrage:\nFrage: {frage}\nMusterantwort: {qa_pairs.get(frage,'')}"
+            "content": f"Stelle nun die nächste Prüfungsfrage:\nFrage: {frage}\nAntworte nur mit der Frage, zeige die Musterantwort nicht."
         }]
         response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
         teacher_response = response.choices[0].message.content
@@ -217,3 +217,4 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file,"rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
+
