@@ -29,42 +29,28 @@ fragen_raw = load_text(urls["fragen"]).splitlines()
 antworten_raw = load_text(urls["antworten"]).splitlines()
 qa_pairs = dict(zip(fragen_raw, antworten_raw))
 
-# --- System Prompt (komplett, aber bleibt unsichtbar im UI) ---
+# --- System Prompt ---
 system_prompt = f"""
 Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. Du bist auch Schweißexperte und bist fachlich kompetent.
 Thema: Schweißen.
 
 ⚠️ Wichtige Regeln:
 - Führe eine mündliche Prüfung zu einem Text und gegebenen Fragen durch.
-- Sprich und antworte **ausschließlich in deutscher Sprache**.
+- Sprich und antworte ausschließlich in deutscher Sprache.
 - Interpretiere Schülerantworten immer als deutschsprachig, auch wenn einzelne englische Wörter vorkommen.
-- Verwende eine klare, einfache Sprache, wie sie in einem Berufsschul-Unterricht üblich ist.
+- Verwende eine klare, einfache Sprache.
 
 Deine Aufgaben:
 - Sprich ruhig, klar und wertschätzend. Stelle gezielte Fragen und fördere ausführliche Antworten.
-- Höre aktiv zu und reagiere **immer zuerst auf das, was der Schüler gerade gesagt hat** (kurze Bestätigung + passende Nachfrage).
-- **Reagiere auf die Antwort des Schülers mit einer ergänzenden oder vertiefenden Nachfrage.**
-- Stelle pro Runde genau **eine** Prüfungsfrage aus der Liste.
-- Nutze die angegebenen Musterantworten als Bewertungsgrundlage. 
-  - Wenn der Schüler teilweise richtig liegt, erkenne das an und ergänze die fehlenden Kernelemente.
-  - Erwähne fehlende Inhalte behutsam und praxisnah.
-- Maximal fachlich, praxisnah, mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typischen Fehlerbildern.
-- Wenn der Schüler unhöflich, respektlos oder beleidigend wird:
-  - Bewahren Sie Ruhe und Professionalität.
-  - Sagen Sie dem Schüler höflich, aber bestimmt, dass ein solches Verhalten im Unterricht nicht akzeptabel ist.
-  - Reduzieren Sie die Endnote um mindestens ein oder zwei Stufen, je nach Schwere.
-  - Reflektieren Sie dieses Verhalten ausdrücklich im abschließenden Feedback.
-  - Bei wiederholter Unhöflichkeit des Schülers reagiere ebenfalls scharf unhöflich (aber nicht beleidigend) und das Ergebnis der Prüfung wird mit der Note 6 bewertet.
-- Am Ende der 7 Fragen, fragst du ob die Schüler noch weitere Fragen besprechen möchten. 
-  - Wenn der Schüler keine weitere Fragen hat, gibst du dem Schüler eine einfache Frage nach folgendem Muster: Gegeben ist eine Schweißanwendung, bzw. eine zu schweißende Aufgabe, bzw. ein Anwendungsfall und der Schüler soll ein Vorschlag zu einem geeigneten Schweißverfahren nennen und diese Auswahl begründen. Korrigiere und ergänze dieses bei Bedarf ausführlich und fachgerecht.
-  - Danach erfolgt die Auswertung.
+- Höre aktiv zu und reagiere immer zuerst auf das, was der Schüler gerade gesagt hat.
+- Reagiere auf die Antwort des Schülers mit einer ergänzenden oder vertiefenden Nachfrage.
+- Stelle pro Runde genau eine Prüfungsfrage aus der Liste.
+- Nutze die Musterantworten als Bewertungsgrundlage.
+- Maximal praxisnah mit Beispielen zu Arbeitssicherheit, Nahtvorbereitung, Werkstoffen, Verfahren, Parametern, typischen Fehlerbildern.
+- Am Ende der 7 Fragen, frage ob weitere Fragen besprochen werden möchten.
 
-Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
-\"\"\"{schweiss_text[:2000]}\"\"\" 
-
-Die Prüfung hat genau 7 Fragen aus der gegebenen Liste. Im Gespräch können sich aber gerne auch mehr Fragen ergeben.
-Nach jeder Schülerantwort: kurze Würdigung + eine Nachfrage/Vertiefung (aber keine neue Prüfungsfrage).
-Keine Lösungen vorwegnehmen.
+Grundlage ist folgender Text:
+\"\"\"{schweiss_text[:2000]}\"\"\"
 
 Hier sind die Prüfungsfragen mit den Musterantworten:
 {qa_pairs}
@@ -97,6 +83,14 @@ if st.session_state.get("start_time"):
     remaining = max(0, 300 - int(elapsed))
     st.info(f"⏱ Verbleibende Zeit: {remaining//60:02d}:{remaining%60:02d}")
 
+# --- Chat-Verlauf anzeigen ---
+st.markdown("### Gesprächsverlauf")
+for msg in st.session_state["messages"]:
+    if msg["role"] == "assistant":
+        st.chat_message("assistant").write(msg["content"])
+    elif msg["role"] == "user":
+        st.chat_message("user").write(msg["content"])
+
 # --- Eingabe ---
 st.markdown("### Deine Antwort (sprich oder schreibe):")
 text_input = st.chat_input("✍️ Tippe deine Antwort und drücke Enter")
@@ -104,22 +98,18 @@ audio_input = st.audio_input("🎙️ Oder antworte per Sprache (Aufnahme starte
 
 # --- Eingabe verarbeiten ---
 def process_user_input(user_text: str):
-    if not user_text:
-        return None
-    if user_text == st.session_state["last_input"]:
+    if not user_text or user_text == st.session_state["last_input"]:
         return None
     st.session_state["last_input"] = user_text
 
     now = time.time()
-    if st.session_state["answer_times"]:
-        last_q_time = st.session_state["answer_times"][-1][0]
-    else:
-        last_q_time = st.session_state["start_time"]
+    last_q_time = st.session_state["answer_times"][-1][0] if st.session_state["answer_times"] else st.session_state["start_time"]
     response_time = now - last_q_time
     st.session_state["answer_times"].append((now, response_time))
 
     st.session_state["messages"].append({"role": "user", "content": user_text})
 
+    # Nächste Frage / Abschluss
     if len(st.session_state["fragen_gestellt"]) < 7:
         verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
         frage = random.choice(verbleibend)
@@ -156,14 +146,10 @@ if audio_input:
         f.write(audio_input.getbuffer())
         temp_filename = f.name
     with open(temp_filename, "rb") as f:
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=f,
-            language="de"
-        )
+        transcript = client.audio.transcriptions.create(model="whisper-1", file=f, language="de")
     user_text_from_audio = transcript.text
     if user_text_from_audio:
-        st.write(f"**Du sagst:** {user_text_from_audio}")
+        st.chat_message("user").write(user_text_from_audio)
         teacher_resp = process_user_input(user_text_from_audio)
         if teacher_resp is not None:
             st.chat_message("assistant").write(teacher_resp)
@@ -172,11 +158,11 @@ if audio_input:
 if st.session_state["finished"]:
     user_answers = [m["content"] for m in st.session_state["messages"] if m["role"] == "user"]
     word_counts = [len(ans.split()) for ans in user_answers]
-    avg_length = sum(word_counts) / len(word_counts) if word_counts else 0
+    avg_length = sum(word_counts)/len(word_counts) if word_counts else 0
     total_words = sum(word_counts)
     num_answers = len(user_answers)
     response_times = [rt for _, rt in st.session_state["answer_times"][1:]]
-    avg_response_time = sum(response_times) / len(response_times) if response_times else 0
+    avg_response_time = sum(response_times)/len(response_times) if response_times else 0
 
     eval_prompt = f"""
     Du bist Fachkundelehrer für Industriemechaniker. 
@@ -194,10 +180,7 @@ if st.session_state["finished"]:
     Antworte klar, strukturiert und ausschließlich auf Deutsch.
     """
 
-    feedback = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=st.session_state["messages"] + [{"role": "system", "content": eval_prompt}]
-    )
+    feedback = client.chat.completions.create(model="gpt-4o-mini", messages=st.session_state["messages"] + [{"role":"system","content":eval_prompt}])
     feedback_text = feedback.choices[0].message.content
     st.subheader("📊 Endbewertung")
     st.write(feedback_text)
