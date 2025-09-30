@@ -118,6 +118,46 @@ def process_user_input(user_text: str):
                 st.session_state["messages"].append({"role": "assistant", "content": f"Erste Prüfungsfrage: {frage}"})
         return teacher_response
 
+    # --- Schritt 2: Wenn noch keine Frage gestellt wurde, nichts tun ---
+    if not st.session_state["first_question_given"]:
+        return None
+
+    # --- Schritt 3: Auf Schülerantwort reagieren ---
+    prompt = st.session_state["messages"] + [{
+        "role": "system",
+        "content": (
+            "Du bist der Lehrer. Reagiere **erst jetzt** auf die Schülerantwort. "
+            "Nutze die Musterantwort nur intern zur Bewertung. Stelle keine neue Frage, "
+            "sondern kommentiere die Antwort wertschätzend und fachlich korrekt."
+        )
+    }]
+    response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
+    teacher_response = response.choices[0].message.content
+    st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+
+    # --- Schritt 4: Neue Frage stellen, wenn noch nicht alle 7 ---
+    if len(st.session_state["fragen_gestellt"]) < 7:
+        verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
+        if verbleibend:
+            frage = random.choice(verbleibend)
+            st.session_state["fragen_gestellt"].append(frage)
+            st.session_state["answer_times"].append((time.time(), 0))
+            st.session_state["messages"].append({"role": "assistant", "content": f"Neue Prüfungsfrage: {frage}"})
+    else:
+        # Prüfung vorbei
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=st.session_state["messages"] + [
+                {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine kurze Abschlussbemerkung (ohne Note)."}
+            ]
+        )
+        final_msg = response.choices[0].message.content
+        st.session_state["messages"].append({"role": "assistant", "content": final_msg})
+        st.session_state["finished"] = True
+
+    return teacher_response
+
+
     # --- Schritt 2: Wenn erste Frage noch nicht gestellt, keine fachliche Reaktion ---
     if not st.session_state["first_question_given"]:
         return None
@@ -276,3 +316,4 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file,"rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
+
