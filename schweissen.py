@@ -102,12 +102,11 @@ def process_user_input(user_text: str):
     # Schülerantwort speichern
     st.session_state["messages"].append({"role": "user", "content": user_text})
 
-    # --- Schritt 1: Smalltalk erkennen ---
+    # --- Smalltalk erkennen ---
     if any(g in user_text.lower() for g in ["guten morgen", "hallo", "hi", "servus"]):
         teacher_response = "Hallo! Schön, dass du da bist. Lass uns mit der Prüfung beginnen."
         st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
-
-        # --- Erste Frage erst nach Smalltalk ---
+        # Erste Frage stellen
         if not st.session_state["first_question_given"]:
             verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
             if verbleibend:
@@ -117,6 +116,45 @@ def process_user_input(user_text: str):
                 st.session_state["first_question_given"] = True
                 st.session_state["messages"].append({"role": "assistant", "content": f"Erste Prüfungsfrage: {frage}"})
         return teacher_response
+
+    # --- Wenn noch keine Frage gestellt, warte ---
+    if not st.session_state["first_question_given"]:
+        return None
+
+    # --- Fachliche Antwort verarbeiten ---
+    prompt = st.session_state["messages"] + [{
+        "role": "system",
+        "content": (
+            "Du bist der Lehrer. Reagiere **wertschätzend und fachlich korrekt** auf die Schülerantwort. "
+            "Stelle keine neue Frage. Nutze die Musterantwort nur intern zur Bewertung."
+        )
+    }]
+    response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
+    teacher_response = response.choices[0].message.content
+    st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+
+    # --- Neue Frage stellen, wenn noch nicht alle 7 ---
+    if len(st.session_state["fragen_gestellt"]) < 7:
+        verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
+        if verbleibend:
+            frage = random.choice(verbleibend)
+            st.session_state["fragen_gestellt"].append(frage)
+            st.session_state["answer_times"].append((time.time(), 0))
+            st.session_state["messages"].append({"role": "assistant", "content": f"Neue Prüfungsfrage: {frage}"})
+    else:
+        # Prüfung vorbei
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=st.session_state["messages"] + [
+                {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine kurze Abschlussbemerkung (ohne Note)."}
+            ]
+        )
+        final_msg = response.choices[0].message.content
+        st.session_state["messages"].append({"role": "assistant", "content": final_msg})
+        st.session_state["finished"] = True
+
+    return teacher_response
+
 
     # --- Schritt 2: Wenn noch keine Frage gestellt wurde, nichts tun ---
     if not st.session_state["first_question_given"]:
@@ -316,4 +354,5 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file,"rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
+
 
