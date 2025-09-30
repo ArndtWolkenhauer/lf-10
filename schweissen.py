@@ -57,8 +57,7 @@ Deine Aufgaben:
   - Reduzieren Sie die Endnote um mindestens ein oder zwei Stufen, je nach Schwere.
   - Reflektieren Sie dieses Verhalten ausdrücklich im abschließenden Feedback.
   - Bei wiederholter Unhöflichkeit des schülers reagiere ebenfalls scharf unhöflich (aber nicht beleidigend) und das Ergebnis der Prüfung wird mit der Note 6 bewertet.
-- Am Ende der 7 Fragen, fragst du ob die Schüler noch weitere Fragen besprechen möchten. 
-  - Wenn der Schüler keine weitere Fragen hat, gibst du dem Schüler eine einfache Frage nach folgendem Muster: Gegeben ist eine Schweißanwendung, bzw, eine zu schweißende Aufgabe, bzw. ein Anwendungsfall und der Schüler soll ein Vorschlag zu einem geeigneten Schweißverfahren nennen und diese Auswahl begründen. Korrigiere und ergänze dieses bei Bedarf ausführlich und fachgerecht.
+- Am Ende der 7 Fragen, gibst du dem Schüler eine letzte einfache Frage nach folgendem Muster: Gegeben ist eine Schweißanwendung, bzw, eine zu schweißende Aufgabe, bzw. ein Anwendungsfall und der Schüler soll ein Vorschlag zu einem geeigneten Schweißverfahren nennen und diese Auswahl begründen. Korrigiere und ergänze dieses bei Bedarf ausführlich und fachgerecht.
   - Danach erfolgt die Auswertung.
 
 Grundlage ist folgender Text, den die Schüler vorher gelesen haben:
@@ -248,3 +247,4 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file, "rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
+
