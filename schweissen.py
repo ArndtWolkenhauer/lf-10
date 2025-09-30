@@ -6,10 +6,10 @@ import requests
 from fpdf import FPDF
 import random
 
-# --- OpenAI Client ---
+# OpenAI Client initialisieren
 client = openai.OpenAI()
 
-# --- Dateien von GitHub laden ---
+# Dateien von GitHub laden
 urls = {
     "text": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-text.txt",
     "fragen": "https://raw.githubusercontent.com/ArndtWolkenhauer/texts/main/schweissen-fragen.txt",
@@ -27,9 +27,11 @@ def load_text(url):
 schweiss_text = load_text(urls["text"])
 fragen_raw = load_text(urls["fragen"]).splitlines()
 antworten_raw = load_text(urls["antworten"]).splitlines()
+
+# Fragen/Antworten als Dictionary
 qa_pairs = dict(zip(fragen_raw, antworten_raw))
 
-# --- System Prompt ---
+# System Prompt
 system_prompt = f"""
 Du bist Fachkundelehrer für Industriemechaniker an einer deutschen Berufsschule. Du bist auch Schweißexperte und bist fachlich kompetent.
 Thema: Schweißen.
@@ -70,10 +72,9 @@ Hier sind die Prüfungsfragen mit den Musterantworten:
 {qa_pairs}
 """
 
-# --- Streamlit UI ---
-st.title("🛠️ Fachkundeprüfung Schweißen – Simulation")
+st.title("🛠️ Fachkundeprüfung Schweißen – Prüfungs-Simulation")
 
-# --- Session State ---
+# --- Session Variablen ---
 if "messages" not in st.session_state:
     st.session_state["messages"] = [{"role": "system", "content": system_prompt}]
 if "fragen_gestellt" not in st.session_state:
@@ -87,89 +88,163 @@ if "finished" not in st.session_state:
 if "last_input" not in st.session_state:
     st.session_state["last_input"] = None
 
+# Hilfsfunktion PDF
+def safe_text(text):
+    return text.encode('latin-1', errors='replace').decode('latin-1')
+
 # --- Timer ---
-elapsed = time.time() - st.session_state["start_time"]
-remaining = max(0, 300 - int(elapsed))
-st.info(f"⏱ Verbleibende Zeit: {remaining//60:02d}:{remaining%60:02d}")
+if st.session_state.get("start_time"):
+    elapsed = time.time() - st.session_state["start_time"]
+    remaining = max(0, 300 - int(elapsed))
+    minutes = remaining // 60
+    seconds = remaining % 60
+    st.info(f"⏱ Verbleibende Zeit: {minutes:02d}:{seconds:02d}")
 
-# --- Gesprächsverlauf anzeigen ---
-for msg in st.session_state["messages"]:
-    if msg["role"] == "system":
-        continue
-    role = "👨‍🎓 Schüler" if msg["role"] == "user" else "👨‍🏫 Lehrer"
-    with st.chat_message(role):
-        st.markdown(msg["content"])
-
-# --- Eingabe unten ---
-col1, col2 = st.columns([2,1])
-with col1:
-    text_input = st.chat_input("✍️ Tippe deine Antwort und drücke Enter")
-with col2:
-    audio_input = st.audio_input("🎙️ Sprich deine Antwort")
-
-# --- Eingaben verarbeiten ---
+# --- Funktion: Benutzerantwort verarbeiten ---
 def process_user_input(user_text: str):
-    if not user_text or user_text == st.session_state["last_input"]:
+    if not user_text:
+        return None
+    if user_text == st.session_state["last_input"]:
         return None
     st.session_state["last_input"] = user_text
 
+    # Antwortzeit erfassen
     now = time.time()
     if st.session_state["answer_times"]:
-        last_q_time = st.session_state["answer_times"][-1][0]
+        last_question_time = st.session_state["answer_times"][-1][0]
     else:
-        last_q_time = st.session_state["start_time"]
-    response_time = now - last_q_time
+        last_question_time = st.session_state["start_time"]
+    response_time = now - last_question_time
     st.session_state["answer_times"].append((now, response_time))
 
+    # Nachricht speichern
     st.session_state["messages"].append({"role": "user", "content": user_text})
 
+    # Lehrerantwort + ggf. nächste Prüfungsfrage
     if len(st.session_state["fragen_gestellt"]) < 7:
         verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
         frage = random.choice(verbleibend)
         st.session_state["fragen_gestellt"].append(frage)
-        st.session_state["answer_times"].append((time.time(), 0))
+        st.session_state["answer_times"].append((time.time(), 0))  # Zeitpunkt neue Frage
 
         prompt = st.session_state["messages"] + [{
             "role": "system",
             "content": f"Stelle nun die nächste Prüfungsfrage:\nFrage: {frage}\nMusterantwort: {qa_pairs.get(frage,'')}"
         }]
         response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
-        teacher_resp = response.choices[0].message.content
+        teacher_response = response.choices[0].message.content
     else:
+        # Prüfung vorbei: Abschlussbemerkung
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=st.session_state["messages"] + [
                 {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine kurze Abschlussbemerkung (ohne Note)."}
             ]
         )
-        teacher_resp = response.choices[0].message.content
+        teacher_response = response.choices[0].message.content
         st.session_state["finished"] = True
 
-    st.session_state["messages"].append({"role": "assistant", "content": teacher_resp})
-    return teacher_resp
+    st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+    return teacher_response
 
-# --- Text ---
+# === Chatverlauf anzeigen + Eingabefelder immer unten ===
+st.markdown("### Gesprächsverlauf")
+for msg in st.session_state["messages"]:
+    role = "Lehrer" if msg["role"] == "assistant" else ("System" if msg["role"] == "system" else "Schüler")
+    st.write(f"**{role}:** {msg['content']}")
+
+# --- Eingabebereich immer unten ---
+st.markdown("### Deine Antwort (Text oder Sprache)")
+
+# Text-Eingabe
+text_input = st.chat_input("✍️ Tippe deine Antwort und drücke Enter")
+
+# Audio-Eingabe
+audio_input = st.audio_input("🎙️ Oder antworte per Sprache")
+
+# --- Eingabe verarbeiten ---
+user_text = None
 if text_input:
-    teacher_resp = process_user_input(text_input)
-    if teacher_resp:
-        with st.chat_message("👨‍🏫 Lehrer"):
-            st.markdown(teacher_resp)
-
-# --- Audio ---
-if audio_input:
+    user_text = text_input
+elif audio_input:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
         f.write(audio_input.getbuffer())
         temp_filename = f.name
     with open(temp_filename, "rb") as f:
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=f,
-            language="de"
-        )
-    spoken_text = transcript.text
-    if spoken_text:
-        st.session_state["messages"].append({"role": "user", "content": spoken_text})
-        teacher_resp = process_user_input(spoken_text)
-        if teacher_resp:
-            with st.chat_message("👨‍🏫 Lehrer"):
-                st.markdown(teacher_resp)
+        transcript = client.audio.transcriptions.create(model="whisper-1", file=f, language="de")
+    user_text = transcript.text
+    if user_text:
+        st.write(f"**Du sagst:** {user_text}")
+
+if user_text:
+    teacher_resp = process_user_input(user_text)
+    if teacher_resp is not None:
+        st.write(f"**Lehrer:** {teacher_resp}")
+
+# --- Feedback & PDF ---
+if st.session_state["finished"]:
+    user_answers = [m["content"] for m in st.session_state["messages"] if m["role"] == "user"]
+    word_counts = [len(ans.split()) for ans in user_answers]
+    avg_length = sum(word_counts) / len(word_counts) if word_counts else 0
+    total_words = sum(word_counts)
+    num_answers = len(user_answers)
+    response_times = [rt for _, rt in st.session_state["answer_times"][1:]]
+    avg_response_time = sum(response_times) / len(response_times) if response_times else 0
+
+    eval_prompt = f"""
+    Du bist Fachkundelehrer für Industriemechaniker. 
+    Bewerte die mündliche Prüfung zum Thema Schweißen nach folgenden Kriterien:
+
+    1. Fachliche Korrektheit: 60 %
+       - Vergleiche jede Schülerantwort mit der Musterantwort (so weit wie möglich).
+       - Erkenne Teilerfolge an und ergänze fehlende Punkte.
+
+    2. Antwortumfang: 25 %
+       - Anzahl Antworten: {num_answers}
+       - Durchschnittliche Länge: {avg_length:.1f} Wörter
+       - Gesamtumfang: {total_words} Wörter
+
+    3. Reaktionszeit: 15 %
+       - Durchschnittliche Antwortzeit: {avg_response_time:.1f} Sekunden
+       - Sehr lange Antwortzeiten können auf Nachschlagen hindeuten.
+
+    4. Gesamteindruck:
+       - Stärken
+       - Verbesserungsmöglichkeiten (fachlich + sprachlich)
+       - Note (1–6)
+       - Prozentbewertung 0–100 %, unter Berücksichtigung aller drei Kriterien
+
+    Antworte klar, strukturiert und ausschließlich auf Deutsch.
+    """
+
+    feedback = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=st.session_state["messages"] + [{"role": "system", "content": eval_prompt}]
+    )
+    feedback_text = feedback.choices[0].message.content
+    st.subheader("📊 Endbewertung")
+    st.write(feedback_text)
+
+    # PDF generieren
+    def generate_pdf(messages, feedback_text, filename="schweissen_pruefung.pdf"):
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        pdf.cell(0, 10, "Fachkundeprüfung Schweißen", ln=True, align="C")
+        pdf.ln(10)
+        for msg in messages:
+            role = msg["role"].capitalize()
+            content = safe_text(msg["content"])
+            pdf.multi_cell(0, 10, f"{role}: {content}")
+            pdf.ln(2)
+        pdf.ln(5)
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 10, "Endbewertung:", ln=True)
+        pdf.set_font("Arial", size=12)
+        pdf.multi_cell(0, 10, safe_text(feedback_text))
+        pdf.output(filename)
+        return filename
+
+    pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
+    with open(pdf_file, "rb") as f:
+        st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
