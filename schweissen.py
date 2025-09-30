@@ -68,7 +68,6 @@ Die Prüfung hat genau 7 Fragen aus der gegebenen Liste. Im Gespräch können si
 Nach jeder Schülerantwort: kurze Würdigung + eine Nachfrage/Vertiefung (aber keine neue Prüfungsfrage).
 Keine Lösungen vorwegnehmen.
 
-
 Hier sind die Prüfungsfragen mit den Musterantworten:
 {qa_pairs}
 """
@@ -87,6 +86,10 @@ if "answer_times" not in st.session_state:
 if "finished" not in st.session_state:
     st.session_state["finished"] = False
 
+# neu: last_input -> um Doppelverarbeitung zu verhindern
+if "last_input" not in st.session_state:
+    st.session_state["last_input"] = None
+
 # Hilfsfunktion PDF
 def safe_text(text):
     return text.encode('latin-1', errors='replace').decode('latin-1')
@@ -99,73 +102,96 @@ if st.session_state.get("start_time"):
     seconds = remaining % 60
     st.info(f"⏱ Verbleibende Zeit: {minutes:02d}:{seconds:02d}")
 
-# --- Gespräch ---
-if not st.session_state["finished"]:
-    st.markdown("### Deine Antwort:")
-    audio_input = st.audio_input("🎙️ Antwort aufnehmen")
-    text_input = st.text_input("✍️ Oder hier schreiben")
+# === Eingabe-Bereich (Text + Sprache) ===
+st.markdown("### Deine Antwort (sprich oder schreibe):")
 
-    user_text = None
+# Text-Eingabe mit automatischem Leeren (st.chat_input)
+text_input = st.chat_input("✍️ Tippe deine Antwort und drücke Enter (oder sprich unten).")
 
-    # Sprach-Antwort
-    if audio_input:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-            f.write(audio_input.getbuffer())
-            temp_filename = f.name
+# Sprach-Eingabe (Streamlit's audio_input). Wenn du lokal testen willst, diese liefert ein BytesIO-Objekt.
+audio_input = st.audio_input("🎙️ Oder antworte per Sprache (Aufnahme starten)")
 
-        with open(temp_filename, "rb") as f:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=f,
-                language="de"
-            )
-        user_text = transcript.text
-        st.write(f"**Du sagst:** {user_text}")
+# Hilfsfunktion: Eingabe verarbeiten (gleiches Verhalten für Text & Audio)
+def process_user_input(user_text: str):
+    # Verhindern, dass gleiche Eingabe mehrfach verarbeitet wird
+    if not user_text:
+        return None
+    if user_text == st.session_state["last_input"]:
+        return None
+    st.session_state["last_input"] = user_text
 
-    # Text-Antwort
-    elif text_input:
-        user_text = text_input
-        st.write(f"**Du schreibst:** {user_text}")
+    # Antwortzeit erfassen
+    now = time.time()
+    if st.session_state["answer_times"]:
+        last_question_time = st.session_state["answer_times"][-1][0]
+    else:
+        last_question_time = st.session_state["start_time"]
+    response_time = now - last_question_time
+    st.session_state["answer_times"].append((now, response_time))
 
-    if user_text:
-        # Antwortzeit erfassen
-        now = time.time()
-        if st.session_state["fragen_gestellt"]:
-            last_question_time = st.session_state["answer_times"][-1][0]
-        else:
-            last_question_time = st.session_state["start_time"]
-        response_time = now - last_question_time
-        st.session_state["answer_times"].append((now, response_time))
+    # Nachricht speichern
+    st.session_state["messages"].append({"role": "user", "content": user_text})
 
-        st.session_state["messages"].append({"role": "user", "content": user_text})
+    # Frage auswählen (wie vorher: max 5 in original code — ich belasse die Logik unverändert)
+    if len(st.session_state["fragen_gestellt"]) < 5:
+        verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
+        frage = random.choice(verbleibend)
+        st.session_state["fragen_gestellt"].append(frage)
+        st.session_state["answer_times"].append((time.time(), 0))  # Zeitpunkt der neuen Frage
 
-        # Frage auswählen (max 5)
-        if len(st.session_state["fragen_gestellt"]) < 5:
-            verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
-            frage = random.choice(verbleibend)
-            st.session_state["fragen_gestellt"].append(frage)
-            st.session_state["answer_times"].append((time.time(), 0))  # Zeitpunkt der neuen Frage
+        # Lehrerantwort + Frage
+        prompt = st.session_state["messages"] + [{
+            "role": "system",
+            "content": f"Stelle nun die nächste Prüfungsfrage:\nFrage: {frage}\nMusterantwort: {qa_pairs.get(frage,'')}"
+        }]
+        response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
+        teacher_response = response.choices[0].message.content
+    else:
+        # Feedback einleiten
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=st.session_state["messages"] + [
+                {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine kurze Abschlussbemerkung (ohne Note)."}
+            ]
+        )
+        teacher_response = response.choices[0].message.content
+        st.session_state["finished"] = True
 
-            # Lehrerantwort + Frage
-            prompt = st.session_state["messages"] + [{
-                "role": "system",
-                "content": f"Stelle nun die nächste Prüfungsfrage:\nFrage: {frage}\nMusterantwort: {qa_pairs.get(frage,'')}"
-            }]
-            response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
-            teacher_response = response.choices[0].message.content
-        else:
-            # Feedback einleiten
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=st.session_state["messages"] + [
-                    {"role": "system", "content": "Die Prüfung ist vorbei. Gib eine kurze Abschlussbemerkung (ohne Note)."}
-                ]
-            )
-            teacher_response = response.choices[0].message.content
-            st.session_state["finished"] = True
+    st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+    return teacher_response
 
-        st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
-        st.write(f"**Lehrer:** {teacher_response}")
+# --- Verarbeitung: wenn Text eingegeben wurde ---
+if text_input:
+    # chat_input leert sich automatisch nach Submit; process_user_input behandelt Duplikate
+    teacher_resp = process_user_input(text_input)
+    if teacher_resp is not None:
+        st.write(f"**Lehrer:** {teacher_resp}")
+
+# --- Verarbeitung: wenn Audio eingegeben wurde ---
+if audio_input:
+    # Speech-to-Text (Deutsch erzwingen)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+        f.write(audio_input.getbuffer())
+        temp_filename = f.name
+
+    with open(temp_filename, "rb") as f:
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=f,
+            language="de"
+        )
+    user_text_from_audio = transcript.text
+    if user_text_from_audio:
+        st.write(f"**Du sagst:** {user_text_from_audio}")
+        teacher_resp = process_user_input(user_text_from_audio)
+        if teacher_resp is not None:
+            st.write(f"**Lehrer:** {teacher_resp}")
+
+# === Falls bereits Nachrichten vorhanden: Verlauf anzeigen (optional) ===
+st.markdown("### Gesprächsverlauf")
+for msg in st.session_state["messages"]:
+    role = "Lehrer" if msg["role"] == "assistant" else ("System" if msg["role"] == "system" else "Schüler")
+    st.write(f"**{role}:** {msg['content']}")
 
 # --- Feedback & PDF ---
 if st.session_state["finished"]:
