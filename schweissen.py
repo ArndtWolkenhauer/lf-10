@@ -118,31 +118,35 @@ def process_user_input(user_text: str):
                 st.session_state["messages"].append({"role": "assistant", "content": f"Erste Prüfungsfrage: {frage}"})
         return teacher_response
 
-    # --- Schritt 2: Wenn Smalltalk noch nicht erfolgt, keine Frage ---
+    # --- Schritt 2: Wenn erste Frage noch nicht gestellt, keine fachliche Reaktion ---
     if not st.session_state["first_question_given"]:
         return None
 
     # --- Schritt 3: Auf fachliche Antwort reagieren ---
-    prompt = st.session_state["messages"] + [{
-        "role": "system",
-        "content": (
-            "Reagiere wertschätzend und fachlich korrekt auf die Antwort des Schülers. "
-            "Keine neue Prüfungsfrage stellen. Nutze die Musterantwort nur intern zur Bewertung."
-        )
-    }]
-    response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
-    teacher_response = response.choices[0].message.content
-    st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+    # Nur reagieren, wenn es sich **nicht um Smalltalk** handelt
+    if not any(g in user_text.lower() for g in ["guten morgen", "hallo", "hi", "servus"]):
+        prompt = st.session_state["messages"] + [{
+            "role": "system",
+            "content": (
+                "Reagiere wertschätzend und fachlich korrekt auf die Antwort des Schülers. "
+                "Keine neue Prüfungsfrage stellen. Nutze die Musterantwort nur intern zur Bewertung."
+            )
+        }]
+        response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
+        teacher_response = response.choices[0].message.content
+        st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+    else:
+        teacher_response = None
 
     # --- Schritt 4: Neue Frage stellen, wenn noch nicht alle 7 ---
-    if len(st.session_state["fragen_gestellt"]) < 7:
+    if len(st.session_state["fragen_gestellt"]) < 7 and teacher_response is not None:
         verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
         if verbleibend:
             frage = random.choice(verbleibend)
             st.session_state["fragen_gestellt"].append(frage)
             st.session_state["answer_times"].append((time.time(), 0))
             st.session_state["messages"].append({"role": "assistant", "content": f"Neue Prüfungsfrage: {frage}"})
-    else:
+    elif len(st.session_state["fragen_gestellt"]) >= 7 and teacher_response is not None:
         # Prüfung vorbei
         response = client.chat.completions.create(
             model="gpt-4o-mini",
