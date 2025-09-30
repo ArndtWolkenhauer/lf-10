@@ -93,29 +93,53 @@ def process_user_input(user_text: str):
         return None
     st.session_state["last_input"] = user_text
 
-    # Antwortzeit erfassen
-    now = time.time()
-    last_question_time = st.session_state["answer_times"][-1][0] if st.session_state["answer_times"] else st.session_state["start_time"]
-    response_time = now - last_question_time
-    st.session_state["answer_times"].append((now, response_time))
+    # Smalltalk erkennen
+    if any(g in user_text.lower() for g in ["hallo", "hi", "guten morgen", "servus"]):
+        teacher_response = "Hallo! Schön, dass du da bist. Lass uns mit der Prüfung beginnen."
+        st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+
+        # erste Frage stellen
+        if not st.session_state["first_question_given"]:
+            frage = random.choice([q for q in fragen_raw if q not in st.session_state["fragen_gestellt"]])
+            st.session_state["fragen_gestellt"].append(frage)
+            st.session_state["first_question_given"] = True
+            st.session_state["messages"].append({"role": "assistant", "content": f"Erste Prüfungsfrage: {frage}"})
+        return teacher_response
+
+    # --- Prüfen: gibt es eine aktuelle offene Frage? ---
+    offene_fragen = [f for f in st.session_state["fragen_gestellt"] if
+                     f not in [m["content"] for m in st.session_state["messages"] if m["role"]=="user"]]
+    if not offene_fragen:
+        # Noch keine Frage gestellt oder alle beantwortet → warten, keine Antwort generieren
+        return None
 
     # Schülerantwort speichern
     st.session_state["messages"].append({"role": "user", "content": user_text})
 
-    # --- Smalltalk erkennen ---
-    if any(g in user_text.lower() for g in ["guten morgen", "hallo", "hi", "servus"]):
-        teacher_response = "Hallo! Schön, dass du da bist. Lass uns mit der Prüfung beginnen."
-        st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
-        # Erste Frage stellen
-        if not st.session_state["first_question_given"]:
-            verbleibend = list(set(fragen_raw) - set(st.session_state["fragen_gestellt"]))
-            if verbleibend:
-                frage = random.choice(verbleibend)
-                st.session_state["fragen_gestellt"].append(frage)
-                st.session_state["answer_times"].append((time.time(), 0))
-                st.session_state["first_question_given"] = True
-                st.session_state["messages"].append({"role": "assistant", "content": f"Erste Prüfungsfrage: {frage}"})
-        return teacher_response
+    # --- Fachliche Rückmeldung generieren ---
+    prompt = st.session_state["messages"] + [{
+        "role": "system",
+        "content": (
+            "Du bist der Lehrer. Reagiere **wertschätzend und fachlich korrekt** auf die Schülerantwort. "
+            "Stelle keine neue Frage. Musterantwort nur intern."
+        )
+    }]
+    response = client.chat.completions.create(model="gpt-4o-mini", messages=prompt)
+    teacher_response = response.choices[0].message.content
+    st.session_state["messages"].append({"role": "assistant", "content": teacher_response})
+
+    # --- Neue Frage stellen, wenn noch nicht alle 7 ---
+    if len(st.session_state["fragen_gestellt"]) < 7:
+        verbleibend = [q for q in fragen_raw if q not in st.session_state["fragen_gestellt"]]
+        if verbleibend:
+            neue_frage = random.choice(verbleibend)
+            st.session_state["fragen_gestellt"].append(neue_frage)
+            st.session_state["messages"].append({"role": "assistant", "content": f"Neue Prüfungsfrage: {neue_frage}"})
+    else:
+        st.session_state["finished"] = True
+
+    return teacher_response
+
 
     # --- Wenn noch keine Frage gestellt, warte ---
     if not st.session_state["first_question_given"]:
@@ -354,5 +378,6 @@ if st.session_state["finished"]:
     pdf_file = generate_pdf(st.session_state["messages"], feedback_text)
     with open(pdf_file,"rb") as f:
         st.download_button("📥 PDF herunterladen", f, "schweissen_pruefung.pdf")
+
 
 
